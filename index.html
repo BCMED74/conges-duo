@@ -135,4 +135,62 @@ input:not([type=checkbox]):not([type=radio]),select{width:100%;min-width:0;font:
 .two .field{margin:10px 0 0}
 .check{display:flex;align-items:center;gap:8px;margin:14px 0 4px;font-size:14px}
 .check input{width:18px;height:18px;accent-color:var(--c)}
-.sub{padding-l
+.sub{padding-left:12px;border-left:3px solid var(--cl)}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg label{flex:1;text-align:center;cursor:pointer;border-left:1px solid var(--line)}
+.seg label:first-child{border-left:0}
+.seg span{display:block;padding:9px 4px;font-size:14px}
+.seg input{position:absolute;opacity:0;pointer-events:none}
+.seg input:checked+span{background:var(--ink);color:var(--bg)}
+.seg input:focus-visible+span{outline:2px solid var(--a);outline-offset:-2px}
+.days7{display:flex;gap:4px}
+.days7 label{flex:1;text-align:center;border:1px solid var(--line);border-radius:8px;padding:7px 0;font-size:13px;cursor:pointer}
+.days7 input{position:absolute;opacity:0;pointer-events:none}
+.days7 label:has(input:checked){background:var(--rest);border-color:var(--rest);font-weight:600}
+/* Fenêtre */
+dialog{border:0;padding:0;border-radius:18px;width:min(520px,94vw);background:var(--card);color:var(--ink)}
+dialog::backdrop{background:rgb(0 0 0 / .45)}
+.dlg{padding:16px 16px 6px;max-height:86vh;overflow:auto}
+.dlg h3{margin:16px 0 0;font-size:15px}
+.holname{color:var(--hol);margin:0 0 4px;font-weight:600}
+.existing .entry:first-child{border-top:0}
+.hint{margin:4px 0}
+/* Navigation */
+.fab{position:fixed;right:16px;bottom:calc(80px + env(safe-area-inset-bottom));z-index:6;width:56px;height:56px;border:0;border-radius:18px;
+  background:var(--a);color:#fff;font-size:30px;line-height:1;cursor:pointer;box-shadow:0 6px 18px rgb(29 78 216 / .35)}
+nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:5;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+nav.tabs button{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;padding:8px 0 7px;border:0;background:none;color:var(--mute);font-size:11px;cursor:pointer}
+nav.tabs .ic{font-size:19px;line-height:1.2}
+nav.tabs button.on{color:var(--a);font-weight:600}
+.toast{position:fixed;left:50%;bottom:calc(150px + env(safe-area-inset-bottom));z-index:30;transform:translateX(-50%);max-width:90vw;
+  padding:10px 16px;border-radius:12px;background:var(--ink);color:var(--bg);font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.on{opacity:1}
+@media (prefers-reduced-motion:reduce){.toast{transition:none}}
+@media (min-width:600px){.day{min-height:74px}.lane{height:13px}}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="duo" aria-hidden="true"><i></i><i></i></span>Congés Duo</h1>
+  <div class="yearsel">
+    <button class="syncdot s-off" id="syncDot" data-act="sync" aria-label="Synchroniser avec GitHub"></button>
+    <button class="iconbtn" data-act="year" data-d="-1" aria-label="Année précédente">‹</button>
+    <strong id="yearLbl"></strong>
+    <button class="iconbtn" data-act="year" data-d="1" aria-label="Année suivante">›</button>
+  </div>
+</header>
+<main id="view"></main>
+<button class="fab" id="fab" data-act="add" aria-label="Nouvelle saisie">+</button>
+<nav class="tabs">
+  <button data-act="tab" data-v="home"><span class="ic">◐</span>Accueil</button>
+  <button data-act="tab" data-v="cal"><span class="ic">▦</span>Calendrier</button>
+  <button data-act="tab" data-v="ponts"><span class="ic">⌒</span>Ponts</button>
+  <button data-act="tab" data-v="list"><span class="ic">☰</span>Saisies</button>
+  <button data-act="tab" data-v="set"><span class="ic">⚙</span>Réglages</button>
+</nav>
+<dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<input type="file" id="importFile" accept=".json,application/json,text/plain" hidden>
+<script src="app.js"></script>
+</body>
+</html>
