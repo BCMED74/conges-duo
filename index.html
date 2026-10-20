@@ -8,6 +8,10 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Congés Duo">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
 :root{
   --bg:#eef1f6;--card:#fff;--ink:#1c2230;--mute:#667085;--line:#dde2ea;--work:#eef0f4;
@@ -129,7 +133,7 @@ main{max-width:720px;margin:0 auto;padding:12px}
 .btns.end{justify-content:flex-end}
 .field{display:block;margin:10px 0}
 .lbl{display:block;font-size:12px;color:var(--mute);margin-bottom:4px}
-input:not([type=checkbox]):not([type=radio]),select{width:100%;min-width:0;font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink)}
+input:not([type=checkbox]):not([type=radio]),select,textarea{width:100%;min-width:0;font:inherit;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink)}
 .two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
 .row>span{min-width:8.5em}
 .two .field{margin:10px 0 0}
@@ -147,6 +151,30 @@ input:not([type=checkbox]):not([type=radio]),select{width:100%;min-width:0;font:
 .days7 label{flex:1;text-align:center;border:1px solid var(--line);border-radius:8px;padding:7px 0;font-size:13px;cursor:pointer}
 .days7 input{position:absolute;opacity:0;pointer-events:none}
 .days7 label:has(input:checked){background:var(--rest);border-color:var(--rest);font-weight:600}
+/* Sections repliables (Réglages) */
+.sect{background:var(--card);border:1px solid var(--line);border-radius:16px;margin-bottom:12px;overflow:hidden}
+.sect>summary{display:flex;align-items:center;gap:10px;padding:15px 14px;font-weight:650;font-size:16px;cursor:pointer;list-style:none}
+.sect>summary::-webkit-details-marker{display:none}
+.sect>summary .grow{flex:1}
+.sect .plus{width:28px;height:28px;border-radius:50%;background:var(--work);display:grid;place-items:center;font-size:18px;line-height:1}
+.sect .plus::after{content:"+"}
+.sect[open]>summary .plus::after{content:"−"}
+.sect[open]>summary{border-bottom:1px solid var(--line)}
+.sect-b{padding:4px 14px 12px}
+.sect-b h4{margin:16px 0 0;font-size:14px}
+.sect-b .card{margin-top:12px}
+.calc{margin:8px 0 0;font-size:14px}
+/* Voyages */
+.trip-h{display:flex;align-items:flex-start;gap:8px}
+.trip-h .grow{flex:1;min-width:0}
+.who-l{display:flex;gap:12px;font-size:13px;margin-top:4px;flex-wrap:wrap}
+.tnotes{white-space:pre-wrap;font-size:14px;margin:10px 0 0}
+.item{display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--line);font-size:14px;align-items:flex-start}
+.item .ico{font-size:20px;line-height:1.2}
+.item .grow{flex:1;min-width:0;overflow-wrap:anywhere}
+.day .tripm{position:absolute;top:3px;left:22px;font-size:10px;line-height:1;color:var(--a)}
+.hint-ios{border-color:var(--a);font-size:14px}
+.dst{border-color:var(--star);font-size:14px}
 /* Fenêtre */
 dialog{border:0;padding:0;border-radius:18px;width:min(520px,94vw);background:var(--card);color:var(--ink)}
 dialog::backdrop{background:rgb(0 0 0 / .45)}
@@ -159,7 +187,7 @@ dialog::backdrop{background:rgb(0 0 0 / .45)}
 .fab{position:fixed;right:16px;bottom:calc(80px + env(safe-area-inset-bottom));z-index:6;width:56px;height:56px;border:0;border-radius:18px;
   background:var(--a);color:#fff;font-size:30px;line-height:1;cursor:pointer;box-shadow:0 6px 18px rgb(29 78 216 / .35)}
 nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:5;display:flex;background:var(--card);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
-nav.tabs button{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;padding:8px 0 7px;border:0;background:none;color:var(--mute);font-size:11px;cursor:pointer}
+nav.tabs button{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:1px;padding:8px 0 7px;border:0;background:none;color:var(--mute);font-size:11px;cursor:pointer}
 nav.tabs .ic{font-size:19px;line-height:1.2}
 nav.tabs button.on{color:var(--a);font-weight:600}
 .toast{position:fixed;left:50%;bottom:calc(150px + env(safe-area-inset-bottom));z-index:30;transform:translateX(-50%);max-width:90vw;
@@ -186,6 +214,7 @@ nav.tabs button.on{color:var(--a);font-weight:600}
   <button data-act="tab" data-v="cal"><span class="ic">▦</span>Calendrier</button>
   <button data-act="tab" data-v="ponts"><span class="ic">⌒</span>Ponts</button>
   <button data-act="tab" data-v="list"><span class="ic">☰</span>Saisies</button>
+  <button data-act="tab" data-v="trips"><span class="ic">✈</span>Voyages</button>
   <button data-act="tab" data-v="set"><span class="ic">⚙</span>Réglages</button>
 </nav>
 <dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>

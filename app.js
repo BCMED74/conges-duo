@@ -8,7 +8,8 @@ const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
   'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-const TYPES = { conge: 'Congé', extra: 'Travail en plus', otdone: 'Heures sup faites', otrecup: 'Récup heures sup' };
+const TYPES = { conge: 'Congé', extra: 'Travail en plus', otdone: 'Heures sup faites', otrecup: 'Congé sur heures sup', otbal: 'Réserve d\u2019heures notée' };
+const TYPE_FORM = { conge: 'Congé (sur le droit annuel)', otrecup: 'Congé sur heures sup (pris sur la réserve)', extra: 'Travail en plus (jour de repos travaillé)', otdone: 'Heures sup faites (en heures)' };
 const PARTS = { full: 'Journée', am: 'Matin', pm: 'Après-midi' };
 
 /* ---------- Dates (chaînes AAAA-MM-JJ, calculs en UTC) ---------- */
@@ -63,13 +64,18 @@ const holidayName = s => holidays(+s.slice(0, 4)).map[s] || null;
 /* ---------- Données ---------- */
 function defaultPerson(name, droit, bloc, ot) {
   return {
-    name, rest: [6, 0], droit, report: {},
+    name, rest: [6, 0], droit, report: {}, contractStart: '', taux: 100,
     bloc: { enabled: bloc, official: 10, periods: {} },
     ot: { enabled: ot, startDate: '', startHours: 0, hoursPerDay: 8.4 },
+    sched: {
+      enabled: false,
+      summer: { wkStart: '08:00', lunchStart: '12:00', lunchEnd: '14:00', wkEnd: '18:30', satStart: '08:00', satEnd: '17:00', satPause: 30 },
+      winter: { wkStart: '08:00', lunchStart: '12:00', lunchEnd: '14:00', wkEnd: '18:00', satStart: '09:00', satEnd: '17:00', satPause: 30 },
+    },
   };
 }
 function defaultData() {
-  return { version: 1, su: 0, persons: { a: defaultPerson('Personne 1', 20, true, false), b: defaultPerson('Personne 2', 25, false, true) }, entries: [], deleted: {} };
+  return { version: 1, su: 0, persons: { a: defaultPerson('Personne 1', 20, true, false), b: defaultPerson('Personne 2', 25, false, true) }, entries: [], trips: [], deleted: {} };
 }
 function deepMerge(base, over) {
   const out = { ...base };
@@ -82,7 +88,7 @@ function deepMerge(base, over) {
 }
 function migrate(d) {
   const def = defaultData();
-  const out = { version: 1, su: +d.su || 0, persons: {}, entries: Array.isArray(d.entries) ? d.entries : [],
+  const out = { version: 1, su: +d.su || 0, persons: {}, entries: Array.isArray(d.entries) ? d.entries : [], trips: Array.isArray(d.trips) ? d.trips : [],
     deleted: d.deleted && typeof d.deleted === 'object' && !Array.isArray(d.deleted) ? d.deleted : {} };
   for (const p of P) out.persons[p] = deepMerge(def.persons[p], (d.persons && d.persons[p]) || {});
   return out;
@@ -129,7 +135,7 @@ function dayInfo(p, s, idx) {
   let ot = false;
   for (const e of (idx[s] || [])) {
     if (e.person !== p) continue;
-    if (e.type === 'otdone') { ot = true; continue; }
+    if (e.type === 'otdone' || e.type === 'otbal') { ot = true; continue; }
     const k = e.type === 'conge' ? 'conge' : e.type === 'otrecup' ? 'recup' : 'extra';
     for (const h of (e.part === 'full' ? ['am', 'pm'] : [e.part])) half[h] = { k, st: e.status, id: e.id };
   }
@@ -137,6 +143,51 @@ function dayInfo(p, s, idx) {
   return { base, bloc, am: half.am, pm: half.pm, amOff: off('am'), pmOff: off('pm'), ot };
 }
 const offFrac = (p, s, idx) => { const i = dayInfo(p, s, idx); return (i.amOff ? 0.5 : 0) + (i.pmOff ? 0.5 : 0); };
+
+/* ---------- Horaires de travail (été / hiver) ---------- */
+function lastSunday(y, m) { const d = new Date(Date.UTC(y, m, 0)); d.setUTCDate(d.getUTCDate() - d.getUTCDay()); return fmt(d); }
+const isSummer = s => { const y = +s.slice(0, 4); return s >= lastSunday(y, 3) && s < lastSunday(y, 10); };
+const tmin = t => { const [h, m] = String(t || '0:0').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+const hm = m => { const sg = m < 0 ? '−' : '+'; m = Math.abs(Math.round(m)); return `${sg}${Math.floor(m / 60)} h ${pad(m % 60)}`; };
+const SEASON = { summer: 'Horaire d\u2019été', winter: 'Horaire d\u2019hiver' };
+function planned(p, s) {
+  const w = dow(s); if (w === 0) return null;
+  const season = isSummer(s) ? 'summer' : 'winter', c = DB.persons[p].sched[season];
+  if (w === 6) return { season, sat: true, start: c.satStart, end: c.satEnd, pause: +c.satPause || 0, min: tmin(c.satEnd) - tmin(c.satStart) - (+c.satPause || 0) };
+  return { season, sat: false, start: c.wkStart, l1: c.lunchStart, l2: c.lunchEnd, end: c.wkEnd, min: (tmin(c.lunchStart) - tmin(c.wkStart)) + (tmin(c.wkEnd) - tmin(c.lunchEnd)) };
+}
+const workedMin = (pl, t) => (pl.sat ? tmin(t.out) - tmin(t.in) - (+t.pause || 0) : (tmin(t.l1) - tmin(t.in)) + (tmin(t.out) - tmin(t.l2)));
+const timesText = t => (t.l1 ? `${t.in}–${t.l1} / ${t.l2}–${t.out}` : `${t.in}–${t.out}, pause ${t.pause} min`);
+function schedText(p, season) {
+  const c = DB.persons[p].sched[season];
+  return `semaine ${c.wkStart}–${c.wkEnd} (pause ${c.lunchStart}–${c.lunchEnd}), samedi ${c.satStart}–${c.satEnd} (pause ${c.satPause} min)`;
+}
+function dstChanges(from) {
+  const y = +from.slice(0, 4), list = [];
+  for (const yy of [y, y + 1]) list.push({ date: lastSunday(yy, 3), to: 'summer' }, { date: lastSunday(yy, 10), to: 'winter' });
+  return list.filter(c => c.date >= addDays(from, -1)).sort((a, b) => a.date.localeCompare(b.date));
+}
+const dstLabel = c => (c.to === 'winter' ? 'heure d\u2019hiver' : 'heure d\u2019été');
+function gcalUrl(c) {
+  const details = `Dès le lundi, ${SEASON[c.to].toLowerCase()}. Rappel créé par Congés Duo.`;
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent('Changement d\u2019horaire : ' + dstLabel(c))}&dates=${c.date.replace(/-/g, '')}/${addDays(c.date, 1).replace(/-/g, '')}&details=${encodeURIComponent(details)}`;
+}
+
+/* ---------- Droit de l'année (prorata du contrat et taux d'activité) ---------- */
+function droitInfo(p, y) {
+  const per = DB.persons[p], base = +per.droit || 0, taux = (+per.taux || 100) / 100;
+  let frac = 1;
+  if (per.contractStart) {
+    const [sy, sm, sd] = per.contractStart.split('-').map(Number);
+    if (y < sy) frac = 0;
+    else if (y === sy) { const dim = new Date(Date.UTC(sy, sm, 0)).getUTCDate(); frac = ((12 - sm) + (dim - sd + 1) / dim) / 12; }
+  }
+  const value = Math.round(base * taux * frac * 100) / 100;
+  const parts = [];
+  if (frac < 1) parts.push(`${n(Math.round(frac * 12 * 100) / 100)} mois sur 12`);
+  if (taux !== 1) parts.push(`${n(taux * 100)} %`);
+  return { value, frac, taux, base, text: parts.length ? `${n(base)} j × ${parts.join(' × ')}` : '' };
+}
 
 /* ---------- Compteurs ---------- */
 function counters(p, y) {
@@ -147,7 +198,7 @@ function counters(p, y) {
     if (e.type === 'conge') { if (e.status === 'pris') pris += val(e); else { prevu += val(e); if (e.status === 'demande') demande += val(e); } }
     else if (e.type === 'extra') { if (e.status === 'pris') extraP += val(e); else extraV += val(e); }
   }
-  const droit = +per.droit || 0, report = +(per.report[ys] || 0);
+  const droit = droitInfo(p, +y).value, report = +(per.report[ys] || 0);
   let bloc = null;
   if (per.bloc.enabled) {
     const pr = per.bloc.periods[ys];
@@ -160,10 +211,16 @@ function counters(p, y) {
   const total = droit + report + extraP;
   return { droit, report, pris, prevu, demande, total, restant: total - pris - prevu, restantPris: total - pris, extraP, extraV, bloc };
 }
-function otBalance(p, until, withPrevu) {
+function otBaseline(p, until) {
   const o = DB.persons[p].ot;
-  let h = +o.startHours || 0;
-  const from = o.startDate || '0000-00-00';
+  let b = { date: o.startDate || '0000-00-00', hours: +o.startHours || 0 };
+  for (const e of DB.entries) if (e.person === p && e.type === 'otbal' && e.date <= until && e.date >= b.date) b = { date: e.date, hours: +e.hours || 0 };
+  return b;
+}
+function otBalance(p, until, withPrevu) {
+  const o = DB.persons[p].ot, base = otBaseline(p, until);
+  let h = base.hours;
+  const from = base.date;
   for (const e of DB.entries) {
     if (e.person !== p || e.date <= from || e.date > until) continue;
     if (!withPrevu && e.status !== 'pris') continue;
@@ -240,7 +297,7 @@ function addEntries({ persons, type, part, status, date, end, hours, note }) {
 }
 
 /* ================= Interface ================= */
-const S = { view: 'home', year: new Date().getFullYear(), calM: new Date().getMonth() + 1, filter: 'all' };
+const S = { view: 'home', year: new Date().getFullYear(), calM: new Date().getMonth() + 1, filter: 'all', open: new Set() };
 const $ = id => document.getElementById(id);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const n = x => String(Math.round(x * 100) / 100).replace('.', ',');
@@ -257,14 +314,33 @@ function render() {
   $('yearLbl').textContent = S.year;
   document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === S.view));
   $('fab').classList.toggle('hide', S.view === 'set' || S.view === 'ponts');
-  const v = { home: renderHome, cal: renderCal, ponts: renderPonts, list: renderList, set: renderSet }[S.view];
+  const v = { home: renderHome, cal: renderCal, ponts: renderPonts, list: renderList, trips: renderTrips, set: renderSet }[S.view];
   $('view').innerHTML = v();
   setSyncState();
 }
 
 /* ----- Accueil ----- */
+function iosHint() {
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+  let off = false; try { off = localStorage.getItem('congesDuo.iosHint') === '1'; } catch (e) { /* ignore */ }
+  if (!ios || standalone || off) return '';
+  return `<section class="card hint-ios"><b>Installer l’app sur iPhone</b><br>Dans <b>Safari</b>, touchez le bouton Partager (carré avec une flèche vers le haut), puis <b>« Sur l’écran d’accueil »</b> et <b>Ajouter</b>.
+    <div class="btns"><button class="btn sm" data-act="hideHint">Compris</button></div></section>`;
+}
+function dstCard() {
+  const t = todayISO(), next = dstChanges(t)[0]; if (!next) return '';
+  const d = daysBetween(t, next.date); if (d > 14 || d < -1) return '';
+  const ps = P.filter(p => DB.persons[p].sched.enabled);
+  const canNotif = typeof Notification !== 'undefined' && Notification.permission === 'default';
+  return `<section class="card dst"><b>🕑 Changement d\u2019horaire ${d > 1 ? `dans ${d} jours` : d === 1 ? 'demain' : d === 0 ? 'aujourd\u2019hui' : 'hier'}</b><br>
+    Dimanche ${frDate(next.date).slice(3)} : passage à l\u2019${dstLabel(next)}.${ps.map(p => `<br><b>${nm(p)}</b>, dès le lundi : ${schedText(p, next.to)}.`).join('')}
+    <div class="btns"><a class="btn sm" href="${gcalUrl(next)}" target="_blank" rel="noopener">Ajouter à Google Agenda</a>
+    <button class="btn sm" data-act="dstIcs">Agenda iPhone (.ics)</button>
+    ${canNotif ? '<button class="btn sm" data-act="notifOn">Activer les notifications</button>' : ''}</div></section>`;
+}
 function renderHome() {
-  return P.map(p => personCard(p, S.year)).join('') +
+  return iosHint() + dstCard() + P.map(p => personCard(p, S.year)).join('') +
     `<p class="muted center">Fériés vaudois calculés automatiquement. Touchez un jour du calendrier ou + pour saisir.</p>`;
 }
 function personCard(p, y) {
@@ -285,7 +361,7 @@ function personCard(p, y) {
     <div class="phead"><span class="dot"></span><h2>${nm(p)}</h2></div>
     <div class="kpi">${kpi}</div>
     <div class="bar"><i class="p" style="width:${wP}%"></i><i class="v" style="width:${wV}%"></i></div>
-    ${row(`Droit ${y}`, n(c.droit) + ' j')}${row('Report', n(c.report) + ' j')}
+    ${row(`Droit ${y}`, n(c.droit) + ' j' + (droitInfo(p, +y).text ? `<br><small class="muted">${droitInfo(p, +y).text}</small>` : ''))}${row('Report / ajustement', n(c.report) + ' j')}
     ${row('Jours travaillés en plus', '+ ' + n(c.extraP) + ' j' + (c.extraV ? `<br><small class="muted">+ ${n(c.extraV)} prévus, comptés une fois faits</small>` : ''))}
     ${row('Pris', n(c.pris) + ' j')}${row('Prévu', n(c.prevu) + ' j' + (c.demande ? `<br><small style="color:var(--star)">dont ${n(c.demande)} j à valider</small>` : ''))}`;
   if (over) h += row('Sans solde', `<span style="color:var(--hol)">${n(over)} j</span>` + (overPris && over > overPris ? `<br><small class="muted">dont ${n(overPris)} déjà pris</small>` : ''));
@@ -296,14 +372,17 @@ function personCard(p, y) {
         `${c.bloc.official} j officiels<br><small class="muted">${c.bloc.work} jours de travail couverts, ${c.bloc.used} écoulés</small>`, 'tall');
   }
   if (per.ot.enabled) {
-    if (!per.ot.startDate) h += row('Heures sup', '<span class="muted">solde de départ à saisir dans Réglages</span>');
-    else {
-      const t = todayISO(), hpd = +per.ot.hoursPerDay || 1;
-      const bal = otBalance(p, t, false), proj = otBalance(p, '9999-12-31', true);
-      h += row(`Heures sup au ${short(t)}`, `${n(bal)} h <small class="muted">= ${n(bal / hpd)} j</small>`);
-      if (Math.abs(proj - bal) > 1e-9) h += row('Avec les prévus', `${n(proj)} h <small class="muted">= ${n(proj / hpd)} j</small>`);
-    }
+    const t = todayISO(), hpd = +per.ot.hoursPerDay || 1;
+    const bal = otBalance(p, t, false), proj = otBalance(p, '9999-12-31', true);
+    const base = otBaseline(p, t);
+    h += row(`Réserve d\u2019heures sup au ${short(t)}`, `${n(bal)} h <small class="muted">= ${n(bal / hpd)} j</small>` +
+      (base.date > '0000-00-00' ? `<br><small class="muted">dernier relevé : ${n(base.hours)} h le ${short(base.date)}</small>` : '<br><small class="muted">aucun relevé noté</small>'));
+    if (Math.abs(proj - bal) > 1e-9) h += row('Après les congés prévus', `${n(proj)} h <small class="muted">= ${n(proj / hpd)} j</small>`);
   }
+  const td = todayISO(), bt = [];
+  if (per.sched.enabled && isWorkday(p, td) && y === +td.slice(0, 4)) bt.push(`<button class="btn sm" data-act="hours" data-p="${p}" data-d="${td}">⏱ Mes horaires d’aujourd’hui</button>`);
+  if (per.ot.enabled) bt.push(`<button class="btn sm" data-act="reserve" data-p="${p}">✎ Noter ma réserve</button>`, `<button class="btn sm" data-act="recap" data-p="${p}">📊 Récap ${y}</button>`);
+  if (bt.length) h += `<div class="btns">${bt.join('')}</div>`;
   return h + '</section>';
 }
 
@@ -321,13 +400,14 @@ function renderCal() {
     <div class="who"><span class="pa"><span class="dot"></span>${nm('a')} : ligne du haut</span><span class="pb"><span class="dot"></span>${nm('b')} : ligne du bas</span></div>
     <div class="grid">${['lu', 'ma', 'me', 'je', 've', 'sa', 'di'].map(d => `<div class="dow">${d}</div>`).join('')}`;
   for (let i = 0; i < offset; i++) g += '<div class="day empty"></div>';
-  const hols = [];
+  const hols = [], trips = (DB.trips || []).filter(x => x.start);
   for (let d = 1; d <= dim; d++) {
     const s = iso(y, m, d), hol = holidayName(s), ia = dayInfo('a', s, idx), ib = dayInfo('b', s, idx);
+    const trip = trips.some(x => s >= x.start && s <= (x.end || x.start));
     if (hol) hols.push(`${short(s)} : ${hol}`);
     const both = ia.amOff && ia.pmOff && ib.amOff && ib.pmOff;
     g += `<button class="day${hol ? ' hol' : ''}${s === t ? ' today' : ''}${both ? ' both' : ''}" data-act="day" data-d="${s}">
-      <span class="num">${d}</span>${both ? '<span class="star" title="Off tous les deux">★</span>' : ''}${ia.ot || ib.ot ? '<span class="otm">h</span>' : ''}
+      <span class="num">${d}</span>${trip ? '<span class="tripm" title="Voyage">✈</span>' : ''}${both ? '<span class="star" title="Off tous les deux">★</span>' : ''}${ia.ot || ib.ot ? '<span class="otm">h</span>' : ''}
       ${lane('a', ia)}${lane('b', ib)}</button>`;
   }
   g += '</div>';
@@ -344,7 +424,8 @@ function renderCal() {
     <span>${sw('rest', 'x')} Repos</span>
     <span>${sw('hol', 'x')} Férié</span>
     <span><b class="starl">★</b> Off tous les deux</span>
-    <span><b class="otl">h</b> Heures sup</span></div>`;
+    <span><b class="otl">h</b> Heures sup</span>
+    <span><b>✈</b> Voyage</span></div>`;
   return g;
 }
 
@@ -399,7 +480,7 @@ function renderList() {
     const gk = e.person + '|' + (e.note || e.id);
     const btns = e.status === 'demande' && !shown.has(gk);
     if (btns) shown.add(gk);
-    const detail = e.type === 'otdone' ? `${n(e.hours || 0)} h` : PARTS[e.part];
+    const detail = e.type === 'otbal' ? `${n(e.hours || 0)} h en réserve` : e.type === 'otdone' ? `${n(e.hours || 0)} h${e.times ? ` (${timesText(e.times)})` : ''}` : PARTS[e.part];
     h += `<div class="entry ${pc(e.person)}"><span class="dot"></span><div class="grow"><b>${frDate(e.date)}</b> <span class="muted">${nm(e.person)}</span><br>
       ${TYPES[e.type]}, ${detail} ${tagHtml(e.status)}${e.note ? `<br><small class="muted">${esc(e.note)}</small>` : ''}
       ${btns ? `<div class="btns" style="margin:6px 0 0"><button class="btn sm" data-act="validate" data-id="${e.id}">Valider la demande</button><button class="btn sm danger" data-act="refuse" data-id="${e.id}">Refuser</button></div>` : ''}</div>
@@ -411,17 +492,49 @@ function renderList() {
 
 /* ----- Réglages ----- */
 const field = (label, input, cls = '') => `<label class="field ${cls}"><span class="lbl">${label}</span>${input}</label>`;
+const sect = (k, title, body, cls = '') => `<details class="sect ${cls}" data-k="${k}"${S.open.has(k) ? ' open' : ''}>
+  <summary>${title}<span class="plus" aria-hidden="true"></span></summary><div class="sect-b">${body}</div></details>`;
+function schedFields(p, season) {
+  const c = DB.persons[p].sched[season];
+  const f = (k, l, type = 'time') => field(l, `<input type="${type}"${type === 'number' ? ' inputmode="numeric"' : ''} data-set="${p}.sched.${season}.${k}" value="${c[k]}">`);
+  return `<h4>${SEASON[season]} ${season === 'summer' ? '(fin mars → fin octobre)' : '(fin octobre → fin mars)'}</h4>
+    <div class="two">${f('wkStart', 'Semaine : début')}${f('wkEnd', 'Semaine : fin')}</div>
+    <div class="two">${f('lunchStart', 'Pause de midi : de')}${f('lunchEnd', 'Pause de midi : à')}</div>
+    <div class="two">${f('satStart', 'Samedi : début')}${f('satEnd', 'Samedi : fin')}</div>
+    ${f('satPause', 'Samedi : pause (minutes)', 'number')}`;
+}
+function dstSettings() {
+  const ch = dstChanges(todayISO()).slice(0, 2);
+  return sect('dst', '<span class="grow">Changements d’horaire</span>', `
+    <p class="muted">Calculés automatiquement chaque année (dernier dimanche de mars et d’octobre). Un rappel s’affiche sur l’accueil 14 jours avant.</p>
+    ${ch.map(c => `<div class="row"><span>${frDate(c.date)}</span><b>${dstLabel(c)}</b></div>
+      <div class="btns" style="margin:4px 0 8px"><a class="btn sm" href="${gcalUrl(c)}" target="_blank" rel="noopener">Ajouter à Google Agenda</a></div>`).join('')}
+    <div class="btns"><button class="btn sm" data-act="dstIcs">Les deux dans l’agenda iPhone (.ics)</button>
+    ${typeof Notification !== 'undefined' && Notification.permission === 'default' ? '<button class="btn sm" data-act="notifOn">Activer les notifications</button>' : ''}</div>
+    <p class="muted">Les notifications de l’app s’affichent quand vous l’ouvrez dans les 3 jours avant le changement. Pour une alarme garantie, ajoutez le rappel à l’agenda.</p>`);
+}
+function droitCalcText(p) {
+  const y = S.year, d = droitInfo(p, y);
+  return `Droit ${y} calculé : <b>${n(d.value)} j</b>${d.text ? ` (${d.text})` : ''}`;
+}
 function renderSet() {
   const y = S.year;
-  let h = '';
+  let h = `<p class="muted">Réglages de l\u2019année <b>${y}</b> : change l\u2019année en haut pour régler une autre année.</p>`;
   for (const p of P) {
     const per = DB.persons[p], pr = per.bloc.periods[y] || {};
-    h += `<section class="card ${pc(p)}"><div class="phead"><span class="dot"></span><h2>${nm(p)}</h2></div>
+    const body = `
       ${field('Nom affiché', `<input data-set="${p}.name" value="${esc(per.name)}">`)}
       <div class="field"><span class="lbl">Jours de repos de base</span><div class="days7">${[1, 2, 3, 4, 5, 6, 0].map(d =>
         `<label><input type="checkbox" data-rest="${p}" value="${d}"${per.rest.includes(d) ? ' checked' : ''}>${DOW[d]}</label>`).join('')}</div></div>
-      <div class="two">${field('Droit annuel (jours)', `<input type="number" inputmode="decimal" step="0.5" data-set="${p}.droit" value="${per.droit}">`)}
-      ${field(`Report sur ${y} (jours)`, `<input type="number" inputmode="decimal" step="0.5" data-set="${p}.report.${y}" value="${per.report[y] || 0}">`)}</div>
+      <h4>Contrat</h4>
+      <div class="two">${field('Début du contrat', `<input type="date" data-set="${p}.contractStart" value="${per.contractStart || ''}">`)}
+      ${field('Taux d\u2019activité (%)', `<input type="number" inputmode="decimal" step="5" min="0" max="100" data-set="${p}.taux" value="${per.taux}">`)}</div>
+      ${field('Droit annuel à plein temps (jours)', `<input type="number" inputmode="decimal" step="0.5" data-set="${p}.droit" value="${per.droit}">`)}
+      <p class="muted">Laissez le début du contrat vide s\u2019il est antérieur. L\u2019année du début, le droit est calculé au prorata des mois travaillés.</p>
+      <h4>Année ${y}</h4>
+      <p class="calc" id="calc-${p}">${droitCalcText(p)}</p>
+      ${field(`Report ou ajustement ${y} (jours, + ou −)`, `<input type="number" inputmode="decimal" step="any" data-set="${p}.report.${y}" value="${per.report[y] || 0}">`)}
+      <p class="muted">Positif : jours reportés de l\u2019année précédente. Négatif : correction demandée par l\u2019employeur.</p>
       <label class="check"><input type="checkbox" data-set="${p}.bloc.enabled"${per.bloc.enabled ? ' checked' : ''}> Bloc de fin d\u2019année (compteur séparé)</label>
       ${per.bloc.enabled ? `<div class="sub">${field('Jours officiels du bloc', `<input type="number" step="0.5" data-set="${p}.bloc.official" value="${per.bloc.official}">`)}
         <div class="two">${field(`Début du bloc ${y}`, `<input type="date" data-set="${p}.bloc.periods.${y}.start" value="${pr.start || ''}">`)}
@@ -430,10 +543,14 @@ function renderSet() {
       ${per.ot.enabled ? `<div class="sub"><div class="two">${field('Solde de départ (heures)', `<input type="number" inputmode="decimal" step="0.25" data-set="${p}.ot.startHours" value="${per.ot.startHours}">`)}
         ${field('Solde arrêté au soir du', `<input type="date" data-set="${p}.ot.startDate" value="${per.ot.startDate}">`)}</div>
         ${field('Heures par jour (conversion)', `<input type="number" inputmode="decimal" step="0.1" data-set="${p}.ot.hoursPerDay" value="${per.ot.hoursPerDay}">`)}</div>` : ''}
-    </section>`;
+      <label class="check"><input type="checkbox" data-set="${p}.sched.enabled"${per.sched.enabled ? ' checked' : ''}> Suivi des horaires (calcule les heures sup)</label>
+      ${per.sched.enabled ? `<div class="sub"><p class="muted">En ce moment : <b>${SEASON[isSummer(todayISO()) ? 'summer' : 'winter']}</b>. Le changement se fait automatiquement au passage à l’heure d’été et d’hiver.</p>
+        ${schedFields(p, 'summer')}${schedFields(p, 'winter')}</div>` : ''}`;
+    h += sect('p-' + p, `<span class="dot"></span><span class="grow">${nm(p)}</span>`, body, pc(p));
   }
+  h += dstSettings();
   const hist = SY.owner && SY.repo ? `https://github.com/${encodeURIComponent(SY.owner)}/${encodeURIComponent(SY.repo)}/commits/main/${SY.path.split('/').map(encodeURIComponent).join('/')}` : '';
-  h += `<section class="card"><h2>Sauvegarde privée sur GitHub</h2>
+  h += sect('sync', '<span class="grow">Sauvegarde privée sur GitHub</span>', `
     <p class="muted">Après chaque modification, les données sont envoyées dans votre repo privé. Chaque envoi devient une version dans l\u2019historique du repo. La clé reste sur ce téléphone et n\u2019est jamais exportée.</p>
     <div class="two">${field('Compte GitHub', `<input data-sync="owner" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="nom du compte" value="${esc(SY.owner)}">`)}
     ${field('Repo privé', `<input data-sync="repo" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(SY.repo)}">`)}</div>
@@ -443,20 +560,260 @@ function renderSet() {
     <p class="syncline" id="syncStatus">${syncText()}</p>
     <div class="btns"><button class="btn pri" data-act="sync">Synchroniser maintenant</button>
     ${hist ? `<a class="btn" href="${hist}" target="_blank" rel="noopener">Voir l\u2019historique</a>` : ''}
-    ${SY.token ? '<button class="btn danger" data-act="forget">Retirer la clé</button>' : ''}</div></section>`;
-  h += `<section class="card"><h2>Fichier de sauvegarde</h2>
-    <p class="muted">Copie manuelle, en plus de GitHub : pour archiver un état précis ou repartir d\u2019un fichier. L\u2019import remplace tout.</p>
+    ${SY.token ? '<button class="btn danger" data-act="forget">Retirer la clé de ce téléphone</button>' : ''}</div>`);
+  h += sect('file', '<span class="grow">Fichier de sauvegarde</span>', `
+    <p class="muted">Copie manuelle, en plus de GitHub : pour archiver un état précis ou repartir d\u2019un fichier. L\u2019import remplace tout, ici et sur GitHub.</p>
     <div class="btns"><button class="btn pri" data-act="export">Exporter la sauvegarde (JSON)</button>
     <button class="btn" data-act="import">Importer une sauvegarde</button>
-    <button class="btn" data-act="csv">Exporter en CSV</button>
-    <button class="btn danger" data-act="reset">Tout effacer</button></div>
-    <p class="muted">Le report et le bloc de fin d\u2019année se règlent pour l\u2019année affichée en haut (${y}).</p></section>`;
+    <button class="btn" data-act="csv">Exporter en CSV</button></div>
+    <p class="muted">Effacer ne touche qu\u2019à ce téléphone : la sauvegarde GitHub reste intacte, et remettre la clé récupère tout.</p>
+    <div class="btns"><button class="btn danger" data-act="reset">Effacer les données de ce téléphone</button></div>`);
   return h;
 }
 function setPath(path, value) {
   const keys = path.split('.'); let o = DB.persons;
   for (let i = 0; i < keys.length - 1; i++) { if (!o[keys[i]] || typeof o[keys[i]] !== 'object') o[keys[i]] = {}; o = o[keys[i]]; }
   o[keys[keys.length - 1]] = value;
+}
+
+/* ----- Voyages ----- */
+const ITEM_TYPES = { vol: ['✈️', 'Vol'], train: ['🚆', 'Train'], hotel: ['🏨', 'Hébergement'], voiture: ['🚗', 'Voiture'], activite: ['🎟️', 'Activité'], autre: ['📎', 'Autre'] };
+const whoList = w => (w === 'both' ? P.slice() : [w]);
+const whoDots = w => whoList(w).map(p => `<span class="${pc(p)}" style="display:inline-flex;align-items:center;gap:4px"><span class="dot"></span>${nm(p)}</span>`).join(' ');
+function tripCard(t) {
+  const items = (t.items || []).slice().sort((a, b) => (a.date || '9').localeCompare(b.date || '9') || (a.time || '').localeCompare(b.time || ''));
+  const nd = t.start && t.end ? daysBetween(t.start, t.end) + 1 : 0;
+  let h = `<section class="card trip"><div class="trip-h"><div class="grow"><h2>${esc(t.title)}</h2>
+    <div class="muted">${t.place ? '📍 ' + esc(t.place) + '<br>' : ''}${t.start ? `du ${frDate(t.start)} au ${frDate(t.end || t.start)}${nd ? ` (${nd} jours)` : ''}` : 'dates à définir'}</div>
+    <div class="who-l">${whoDots(t.who || 'both')}</div></div>
+    <button class="iconbtn" data-act="editTrip" data-id="${t.id}" aria-label="Modifier le voyage">✎</button></div>
+    ${t.notes ? `<p class="tnotes">${esc(t.notes)}</p>` : ''}`;
+  for (const it of items) {
+    const [ico, lab] = ITEM_TYPES[it.kind] || ITEM_TYPES.autre;
+    const when = [it.date ? frDate(it.date) : '', it.time || '', it.end && it.end !== it.date ? `→ ${frDate(it.end)}` : ''].filter(Boolean).join(' ');
+    h += `<div class="item"><span class="ico">${ico}</span><div class="grow"><b>${esc(it.title || lab)}</b>
+      ${when ? `<br><small>${when}</small>` : ''}${it.ref ? `<br><small>Réf. <b>${esc(it.ref)}</b></small>` : ''}${it.price ? ` <small class="muted">· ${esc(it.price)}</small>` : ''}
+      ${it.notes ? `<br><small class="muted">${esc(it.notes)}</small>` : ''}
+      <div class="btns" style="margin:6px 0 0">${it.link ? `<a class="btn sm" href="${esc(it.link)}" target="_blank" rel="noopener">Ouvrir le lien</a>` : ''}
+      ${it.file ? `<button class="btn sm" data-act="getFile" data-t="${t.id}" data-id="${it.id}">📄 ${esc(it.file.name)}</button>` : ''}</div>
+      <div id="dl-${it.id}"></div></div>
+      <button class="iconbtn" data-act="editItem" data-t="${t.id}" data-id="${it.id}" aria-label="Modifier">✎</button></div>`;
+  }
+  h += `<div class="btns"><button class="btn sm pri" data-act="addItem" data-t="${t.id}">+ Réservation, billet…</button>
+    ${t.start ? `<button class="btn sm" data-act="tripLeave" data-id="${t.id}">Poser les congés de ce voyage</button>` : ''}</div></section>`;
+  return h;
+}
+function renderTrips() {
+  const t = todayISO(), all = DB.trips || [];
+  const up = all.filter(x => !x.end || x.end >= t).sort((a, b) => (a.start || '9').localeCompare(b.start || '9'));
+  const past = all.filter(x => x.end && x.end < t).sort((a, b) => b.start.localeCompare(a.start));
+  let h = `<p class="muted">Vos voyages : destination, programme, billets, réservations d\u2019hôtel. Les fichiers joints sont rangés dans votre repo privé.</p>`;
+  if (!all.length) return h + '<p class="muted center">Aucun voyage pour l\u2019instant. Touchez + pour en créer un.</p>';
+  h += up.map(tripCard).join('');
+  if (past.length) h += sect('past', `<span class="grow">Voyages passés (${past.length})</span>`, past.map(tripCard).join(''));
+  return h;
+}
+function openTrip(id) {
+  const t = (DB.trips || []).find(x => x.id === id) || { who: 'both' };
+  showDialog(`<h2>${id ? 'Modifier le voyage' : 'Nouveau voyage'}</h2>
+    ${field('Nom du voyage', `<input name="t_title" value="${esc(t.title || '')}" placeholder="ex. Crète">`)}
+    ${field('Destination', `<input name="t_place" value="${esc(t.place || '')}" placeholder="ex. Héraklion, Grèce">`)}
+    <div class="two">${field('Du', `<input type="date" name="t_start" value="${t.start || ''}">`)}${field('Au', `<input type="date" name="t_end" value="${t.end || ''}">`)}</div>
+    <div class="field"><span class="lbl">Qui part</span>${radios('t_who', [['a', nm('a')], ['b', nm('b')], ['both', 'Les deux']], t.who || 'both')}</div>
+    ${field('Programme, idées, notes', `<textarea name="t_notes" rows="4">${esc(t.notes || '')}</textarea>`)}
+    <div class="btns end">${id ? `<button class="btn danger" data-act="delTrip" data-id="${id}">Supprimer</button>` : ''}
+    <button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveTrip" data-id="${id || ''}">Enregistrer</button></div>`);
+}
+function saveTrip(id) {
+  const q = k => document.querySelector(`[name=${k}]`);
+  const title = q('t_title').value.trim(); if (!title) return toast('Donnez un nom au voyage.');
+  const start = q('t_start').value, end = q('t_end').value || start;
+  if (start && end < start) return toast('La date de fin est avant le début.');
+  DB.trips = DB.trips || [];
+  let t = DB.trips.find(x => x.id === id);
+  if (!t) { t = { id: uid(), items: [] }; DB.trips.push(t); }
+  Object.assign(t, { title, place: q('t_place').value.trim(), start, end, who: (document.querySelector('[name=t_who]:checked') || {}).value || 'both', notes: q('t_notes').value.trim(), u: Date.now() });
+  save(); $('dlg').close(); render(); toast('Voyage enregistré');
+}
+function openItem(tid, id) {
+  const t = DB.trips.find(x => x.id === tid); if (!t) return;
+  const it = (t.items || []).find(x => x.id === id) || { kind: 'vol', date: t.start || '' };
+  showDialog(`<h2>${id ? 'Modifier' : 'Ajouter'} : ${esc(t.title)}</h2>
+    ${field('Type', `<select name="i_kind">${Object.entries(ITEM_TYPES).map(([k, [ico, l]]) => `<option value="${k}"${k === it.kind ? ' selected' : ''}>${ico} ${l}</option>`).join('')}</select>`)}
+    ${field('Intitulé', `<input name="i_title" value="${esc(it.title || '')}" placeholder="ex. Genève → Héraklion, Hôtel Minos">`)}
+    <div class="two">${field('Date', `<input type="date" name="i_date" value="${it.date || ''}">`)}${field('Heure', `<input type="time" name="i_time" value="${it.time || ''}">`)}</div>
+    ${field('Jusqu\u2019au (hôtel, location)', `<input type="date" name="i_end" value="${it.end || ''}">`)}
+    <div class="two">${field('N° de réservation', `<input name="i_ref" value="${esc(it.ref || '')}" autocapitalize="characters">`)}${field('Prix', `<input name="i_price" value="${esc(it.price || '')}" placeholder="ex. 420 CHF">`)}</div>
+    ${field('Lien (Booking, compagnie…)', `<input type="url" name="i_link" value="${esc(it.link || '')}" placeholder="https://…">`)}
+    ${field('Note', `<input name="i_notes" value="${esc(it.notes || '')}">`)}
+    ${field(`Fichier : billet, confirmation (PDF ou photo)${it.file ? `<br>Actuel : ${esc(it.file.name)}` : ''}`, '<input type="file" name="i_file" accept="application/pdf,image/*">')}
+    ${syncOn() ? '' : '<p class="muted">Pour joindre un fichier, configurez d\u2019abord la sauvegarde GitHub dans Réglages.</p>'}
+    <div class="btns end">${id ? `<button class="btn danger" data-act="delItem" data-t="${tid}" data-id="${id}">Supprimer</button>` : ''}
+    <button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveItem" data-t="${tid}" data-id="${id || ''}">Enregistrer</button></div>`);
+}
+const safeName = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w.-]+/g, '_').slice(-80);
+const readB64 = f => new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = ko; r.readAsDataURL(f); });
+const fileApi = path => `${repoUrl()}/contents/${path.split('/').map(encodeURIComponent).join('/')}`;
+async function deleteRepoFile(path) {
+  try {
+    const g = await gh('GET', fileApi(path));
+    if (g.ok && g.data && g.data.sha) await gh('DELETE', fileApi(path), { message: `Congés Duo : fichier supprimé (${SY.device || 'appareil'})`, sha: g.data.sha });
+  } catch (e) { /* le fichier reste dans l'historique */ }
+}
+async function saveItem(tid, id) {
+  const t = DB.trips.find(x => x.id === tid); if (!t) return;
+  const q = k => document.querySelector(`[name=${k}]`);
+  const file = q('i_file').files[0];
+  if (file && !syncOn()) return toast('Configurez d\u2019abord la sauvegarde GitHub pour joindre un fichier.');
+  if (file && file.size > 20e6) return toast('Fichier trop lourd (20 Mo maximum).');
+  t.items = t.items || [];
+  let it = t.items.find(x => x.id === id);
+  if (!it) { it = { id: uid() }; t.items.push(it); }
+  Object.assign(it, { kind: q('i_kind').value, title: q('i_title').value.trim(), date: q('i_date').value, time: q('i_time').value,
+    end: q('i_end').value, ref: q('i_ref').value.trim(), price: q('i_price').value.trim(), link: q('i_link').value.trim(), notes: q('i_notes').value.trim() });
+  t.u = Date.now(); save(); $('dlg').close(); render();
+  if (!file) return toast('Enregistré');
+  toast('Envoi du fichier vers le repo privé…');
+  try {
+    const path = `fichiers/${tid}/${it.id}-${safeName(file.name)}`;
+    const old = it.file && it.file.path !== path ? it.file.path : null;
+    const ex = await gh('GET', fileApi(path));
+    const r = await gh('PUT', fileApi(path), { message: `Congés Duo : fichier ajouté (${SY.device || 'appareil'})`, content: await readB64(file), ...(ex.ok && ex.data && ex.data.sha ? { sha: ex.data.sha } : {}) });
+    if (!r.ok) throw syncError(r.status, r.status === 404);
+    it.file = { path, name: file.name, type: file.type || '', size: file.size };
+    t.u = Date.now(); save(); render(); toast('Fichier joint');
+    if (old) deleteRepoFile(old);
+  } catch (err) { toast(err instanceof TypeError ? 'Pas de connexion : fichier non envoyé.' : err.message); }
+}
+async function getFile(tid, id) {
+  const t = DB.trips.find(x => x.id === tid), it = t && (t.items || []).find(x => x.id === id);
+  if (!it || !it.file) return;
+  if (!syncOn()) return toast('Ajoutez la clé GitHub dans Réglages pour ouvrir les fichiers.');
+  const box = $('dl-' + id); if (box) box.innerHTML = '<small class="muted">Chargement…</small>';
+  try {
+    const res = await fetch('https://api.github.com' + fileApi(it.file.path), { cache: 'no-store', headers: { Accept: 'application/vnd.github.raw', Authorization: `Bearer ${SY.token}` } });
+    if (!res.ok) throw syncError(res.status, false);
+    const blob = new Blob([await res.arrayBuffer()], { type: it.file.type || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    if (box) box.innerHTML = (blob.type.startsWith('image/') ? `<img src="${url}" alt="" style="max-width:100%;border-radius:8px;margin-top:6px">` : '') +
+      `<a class="btn sm pri" style="margin-top:6px" href="${url}" download="${esc(it.file.name)}" target="_blank">Ouvrir ${esc(it.file.name)}</a>`;
+  } catch (err) { if (box) box.innerHTML = ''; toast(err instanceof TypeError ? 'Pas de connexion.' : err.message); }
+}
+
+/* ----- Horaires du jour ----- */
+function openHours(p, s) {
+  const pl = planned(p, s); if (!pl) return toast('Pas d\u2019horaire le dimanche.');
+  const ex = DB.entries.find(e => e.person === p && e.date === s && e.type === 'otdone' && e.times);
+  const t = ex ? ex.times : (pl.sat ? { in: pl.start, out: pl.end, pause: pl.pause } : { in: pl.start, l1: pl.l1, l2: pl.l2, out: pl.end });
+  const inp = (k, lab) => field(lab, `<input type="time" name="h_${k}" value="${t[k] || ''}" data-hours="1">`);
+  showDialog(`<h2>Horaires : ${nm(p)}</h2>
+    <p class="muted">${frDate(s)}<br>${SEASON[pl.season]} prévu : ${pl.sat ? `${pl.start}–${pl.end}, pause ${pl.pause} min` : `${pl.start}–${pl.l1} et ${pl.l2}–${pl.end}`}</p>
+    ${pl.sat ? `<div class="two">${inp('in', 'Arrivée')}${inp('out', 'Départ')}</div>${field('Pause prise (minutes)', `<input type="number" inputmode="numeric" name="h_pause" value="${t.pause}" data-hours="1">`)}`
+      : `<div class="two">${inp('in', 'Arrivée')}${inp('l1', 'Départ à midi')}</div><div class="two">${inp('l2', 'Reprise')}${inp('out', 'Départ le soir')}</div>`}
+    <p class="calc" id="h_res"></p>
+    <div class="btns end">${ex ? `<button class="btn danger" data-act="del" data-id="${ex.id}">Supprimer</button>` : ''}
+    <button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveHours" data-p="${p}" data-d="${s}">Enregistrer</button></div>`);
+  hoursCalc();
+}
+function readHours() {
+  const g = k => { const el = document.querySelector(`[name=h_${k}]`); return el ? el.value : undefined; };
+  return { in: g('in'), l1: g('l1'), l2: g('l2'), out: g('out'), pause: g('pause') };
+}
+function hoursCalc() {
+  const b = document.querySelector('[data-act=saveHours]'); if (!b) return;
+  const pl = planned(b.dataset.p, b.dataset.d), diff = workedMin(pl, readHours()) - pl.min, el = $('h_res');
+  if (el) el.innerHTML = diff ? `Écart : <b>${hm(diff)}</b> ${diff > 0 ? '(heures sup)' : '(en moins)'}` : 'Horaire normal : rien à compter.';
+}
+function saveHours(p, s) {
+  const pl = planned(p, s), times = readHours();
+  if (pl.sat) { delete times.l1; delete times.l2; times.pause = +times.pause || 0; } else delete times.pause;
+  const diff = workedMin(pl, times) - pl.min;
+  let ex = DB.entries.find(e => e.person === p && e.date === s && e.type === 'otdone' && e.times);
+  if (!diff && !ex) { $('dlg').close(); return toast('Horaire normal : rien à compter.'); }
+  if (!ex) { ex = { id: uid(), person: p, date: s, type: 'otdone', part: 'full', note: 'Horaires' }; DB.entries.push(ex); }
+  Object.assign(ex, { hours: Math.round(diff / 60 * 100) / 100, times, status: 'pris', u: Date.now() });
+  if (!DB.persons[p].ot.enabled) { DB.persons[p].ot.enabled = true; DB.su = Date.now(); }
+  save(); $('dlg').close(); render(); toast(diff ? `${hm(diff)} enregistré` : 'Horaire normal enregistré');
+}
+function dstIcs() {
+  const ev = dstChanges(todayISO()).slice(0, 2).map(c => {
+    const d = c.date.replace(/-/g, ''), d2 = addDays(c.date, 1).replace(/-/g, '');
+    return ['BEGIN:VEVENT', `UID:dst-${d}@conges-duo`, `DTSTAMP:${d}T000000Z`, `DTSTART;VALUE=DATE:${d}`, `DTEND;VALUE=DATE:${d2}`,
+      `SUMMARY:Changement d'horaire : ${dstLabel(c)}`, `DESCRIPTION:Dès le lundi ${SEASON[c.to].toLowerCase()}.`,
+      'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:Changement d\'horaire', 'TRIGGER:-PT36H', 'END:VALARM', 'END:VEVENT'].join('\r\n');
+  });
+  download('changements-horaire.ics', ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Conges Duo//FR', ...ev, 'END:VCALENDAR'].join('\r\n'), 'text/calendar');
+}
+function dstNotify() {
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  const t = todayISO(), next = dstChanges(t)[0]; if (!next) return;
+  const d = daysBetween(t, next.date); if (d < 0 || d > 3) return;
+  const key = 'congesDuo.dstNotif.' + next.date;
+  try { if (localStorage.getItem(key)) return; localStorage.setItem(key, '1'); } catch (e) { return; }
+  const title = 'Changement d\u2019horaire', body = `Dimanche ${frDate(next.date).slice(3)} : passage à l\u2019${dstLabel(next)}.`;
+  if (navigator.serviceWorker) navigator.serviceWorker.ready.then(r => r.showNotification(title, { body, icon: 'icon-192.png' })).catch(() => {});
+  else { try { new Notification(title, { body }); } catch (e) { /* ignore */ } }
+}
+
+/* ----- Réserve et récap des heures sup ----- */
+const fh = h => { const m = Math.round(Math.abs(h) * 60); return `${h < 0 ? '−' : ''}${Math.floor(m / 60)} h ${pad(m % 60)}`; };
+function openReserve(p, id) {
+  const ex = DB.entries.find(e => e.id === id);
+  const d = ex ? ex.date : todayISO(), hpd = +DB.persons[p].ot.hoursPerDay || 1;
+  const cur = ex ? ex.hours : Math.round(otBalance(p, d, false) * 100) / 100;
+  showDialog(`<h2>Réserve d\u2019heures sup : ${nm(p)}</h2>
+    <p class="muted">Notez la réserve indiquée par votre employeur (fiche de salaire, décompte). Les heures et congés sur heures sup saisis ensuite partent de ce chiffre.</p>
+    <div class="two">${field('Réserve au soir du', `<input type="date" name="r_date" value="${d}">`)}
+    ${field('Heures en réserve', `<input type="number" inputmode="decimal" step="0.25" name="r_hours" value="${cur}" data-res="${hpd}">`)}</div>
+    <p class="calc" id="r_conv">= ${n(cur / hpd)} jour(s) de ${n(hpd)} h</p>
+    <div class="btns end">${ex ? `<button class="btn danger" data-act="del" data-id="${ex.id}">Supprimer</button>` : ''}
+    <button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveReserve" data-p="${p}" data-id="${ex ? ex.id : ''}">Enregistrer</button></div>`);
+}
+function saveReserve(p, id) {
+  const d = document.querySelector('[name=r_date]').value, hrs = parseFloat(String(document.querySelector('[name=r_hours]').value).replace(',', '.'));
+  if (!d || isNaN(hrs)) return toast('Indiquez la date et le nombre d\u2019heures.');
+  let e = DB.entries.find(x => x.id === id) || DB.entries.find(x => x.person === p && x.type === 'otbal' && x.date === d);
+  if (!e) { e = { id: uid(), person: p, type: 'otbal', part: 'full', status: 'pris' }; DB.entries.push(e); }
+  Object.assign(e, { date: d, hours: hrs, u: Date.now() });
+  if (!DB.persons[p].ot.enabled) { DB.persons[p].ot.enabled = true; DB.su = Date.now(); }
+  save(); $('dlg').close(); render(); toast(`Réserve notée : ${n(hrs)} h`);
+}
+function recapData(p, y) {
+  const hpd = +DB.persons[p].ot.hoursPerDay || 1, t = todayISO(), rows = [];
+  for (let m = 1; m <= 12; m++) {
+    const a = iso(y, m, 1), z = iso(y, m, new Date(Date.UTC(y, m, 0)).getUTCDate());
+    let plus = 0, minus = 0, rec = 0, days = 0;
+    for (const e of DB.entries) {
+      if (e.person !== p || e.date < a || e.date > z || e.status !== 'pris') continue;
+      if (e.type === 'otdone') { const h = +e.hours || 0; if (h >= 0) plus += h; else minus += h; days++; }
+      else if (e.type === 'otrecup') rec += val(e) * hpd;
+    }
+    rows.push({ m, plus, minus, rec, days, bal: a <= t ? otBalance(p, z < t ? z : t, false) : null });
+  }
+  return rows;
+}
+function openRecap(p) {
+  const y = S.year, rows = recapData(p, y), hpd = +DB.persons[p].ot.hoursPerDay || 1;
+  const tot = rows.reduce((a, r) => ({ plus: a.plus + r.plus, minus: a.minus + r.minus, rec: a.rec + r.rec, days: a.days + r.days }), { plus: 0, minus: 0, rec: 0, days: 0 });
+  const td = 'style="padding:6px 4px;border-top:1px solid var(--line);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap"';
+  const tdl = 'style="padding:6px 4px;border-top:1px solid var(--line);text-align:left"';
+  const th = 'style="padding:6px 4px;text-align:right;font-size:12px;color:var(--mute);font-weight:500"';
+  const body = rows.map(r => `<tr${!r.days && !r.rec ? ' style="color:var(--mute)"' : ''}><td ${tdl}>${MONTHS[r.m - 1]}</td>
+    <td ${td}>${r.plus ? '+' + fh(r.plus) : '–'}</td><td ${td}>${r.minus ? fh(r.minus) : '–'}</td><td ${td}>${r.rec ? '−' + fh(r.rec) : '–'}</td>
+    <td ${td}>${r.bal === null ? '' : `<b>${fh(r.bal)}</b>`}</td></tr>`).join('');
+  showDialog(`<h2>Heures sup ${y} : ${nm(p)}</h2>
+    <p class="muted">Heures sup : dépassements notés (⏱ Horaires ou « Heures sup faites »). Récup : congés pris sur la réserve. Solde : réserve en fin de mois.</p>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr><th style="padding:6px 4px;text-align:left;font-size:12px;color:var(--mute);font-weight:500">Mois</th><th ${th}>Heures sup</th><th ${th}>En moins</th><th ${th}>Récup</th><th ${th}>Solde</th></tr></thead>
+    <tbody>${body}<tr><td ${tdl}><b>Total ${y}</b></td><td ${td}><b>+${fh(tot.plus)}</b></td><td ${td}><b>${tot.minus ? fh(tot.minus) : '–'}</b></td><td ${td}><b>${tot.rec ? '−' + fh(tot.rec) : '–'}</b></td><td ${td}></td></tr></tbody></table></div>
+    <p class="calc">Net ${y} : <b>${fh(tot.plus + tot.minus)}</b> (${n((tot.plus + tot.minus) / hpd)} j), sur ${tot.days} jour(s) saisis.</p>
+    <div class="btns end"><button class="btn" data-act="recapCsv" data-p="${p}">Exporter en CSV</button><button class="btn pri" data-act="close">Fermer</button></div>`);
+}
+function recapCsv(p) {
+  const y = S.year, lines = ['mois;heures sup (h);en moins (h);récup (h);solde fin de mois (h);jours saisis'];
+  const f = x => String(Math.round(x * 100) / 100).replace('.', ',');
+  recapData(p, y).forEach(r => lines.push([`${MONTHS[r.m - 1]} ${y}`, f(r.plus), f(r.minus), f(r.rec), r.bal === null ? '' : f(r.bal), r.days].join(';')));
+  download(`heures-sup-${safeName(DB.persons[p].name)}-${y}.csv`, '\ufeff' + lines.join('\r\n'), 'text/csv');
 }
 
 /* ----- Fenêtre de saisie ----- */
@@ -470,14 +827,16 @@ function radios(name, opts, cur) {
 }
 function entryForm(e, isEdit) {
   const otOn = P.some(p => DB.persons[p].ot.enabled);
-  const typeOpts = Object.entries(TYPES).filter(([k]) => otOn || (k !== 'otdone' && k !== 'otrecup'))
+  const typeOpts = Object.entries(TYPE_FORM).filter(([k]) => otOn || (k !== 'otdone' && k !== 'otrecup'))
     .map(([k, l]) => `<option value="${k}"${k === e.type ? ' selected' : ''}>${l}</option>`).join('');
+  const resHint = P.filter(p => DB.persons[p].ot.enabled).map(p => { const b = otBalance(p, '9999-12-31', true), hpd = +DB.persons[p].ot.hoursPerDay || 1; return `${nm(p)} : ${n(b)} h = ${n(b / hpd)} j`; }).join(', ');
   const who = isEdit ? radios('f_who', [['a', nm('a')], ['b', nm('b')]], e.person)
     : radios('f_who', [['a', nm('a')], ['b', nm('b')], ['both', 'Les deux']], e.person);
   return `<div class="field"><span class="lbl">Pour qui</span>${who}</div>
     <div class="two">${field('Date', `<input type="date" name="f_date" value="${e.date}">`)}
     ${isEdit ? '' : field('Jusqu\u2019au (optionnel)', '<input type="date" name="f_end" value="">')}</div>
     ${field('Type', `<select name="f_type">${typeOpts}</select>`)}
+    <p class="muted hide" data-row="reshint">Réserve disponible (après congés prévus) : ${resHint}</p>
     <div class="field" data-row="part"><span class="lbl">Durée</span>${radios('f_part', Object.entries(PARTS), e.part || 'full')}</div>
     ${field('Heures faites', `<input type="number" inputmode="decimal" step="0.25" name="f_hours" value="${e.hours || ''}">`, 'hide" data-row="hours')}
     ${field('Statut', `<select name="f_status">${isEdit ? '' : '<option value="auto">Auto : passé = pris, futur = à valider</option>'}
@@ -487,11 +846,12 @@ function entryForm(e, isEdit) {
 }
 function openDay(s) {
   const idx = buildIdx(), hol = holidayName(s);
-  const list = (idx[s] || []).map(e => `<div class="entry ${pc(e.person)}"><span class="dot"></span><div class="grow">${nm(e.person)} : ${TYPES[e.type]}, ${e.type === 'otdone' ? n(e.hours || 0) + ' h' : PARTS[e.part]} ${tagHtml(e.status)}${e.note ? ` <small class="muted">${esc(e.note)}</small>` : ''}</div>
+  const list = (idx[s] || []).map(e => `<div class="entry ${pc(e.person)}"><span class="dot"></span><div class="grow">${nm(e.person)} : ${TYPES[e.type]}, ${e.type === 'otbal' ? n(e.hours || 0) + ' h' : e.type === 'otdone' ? n(e.hours || 0) + ' h' + (e.times ? ` (${timesText(e.times)})` : '') : PARTS[e.part]} ${tagHtml(e.status)}${e.note ? ` <small class="muted">${esc(e.note)}</small>` : ''}</div>
     <button class="iconbtn" data-act="edit" data-id="${e.id}" aria-label="Modifier">✎</button><button class="iconbtn" data-act="del" data-id="${e.id}" aria-label="Supprimer">✕</button></div>`).join('');
   showDialog(`<h2>${frDate(s)}</h2>${hol ? `<p class="holname">${esc(hol)}</p>` : ''}
     <p class="muted">${P.map(p => `${nm(p)} : ${dayStateText(p, s)}`).join('<br>')}</p>
     ${list ? `<div class="existing">${list}</div>` : ''}
+    ${P.filter(p => DB.persons[p].sched.enabled && isWorkday(p, s)).map(p => `<button class="btn sm ${pc(p)}" data-act="hours" data-p="${p}" data-d="${s}">⏱ Horaires de ${nm(p)}</button>`).join(' ')}
     <h3>Nouvelle saisie</h3>${entryForm({ date: s, person: 'both', type: 'conge', part: 'full' }, false)}
     <div class="btns end"><button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveAdd">Enregistrer</button></div>`);
 }
@@ -506,6 +866,7 @@ function syncForm() {
   const ot = t.value === 'otdone';
   document.querySelector('[data-row=part]').classList.toggle('hide', ot);
   document.querySelector('[data-row=hours]').classList.toggle('hide', !ot);
+  const rh = document.querySelector('[data-row=reshint]'); if (rh) rh.classList.toggle('hide', t.value !== 'otrecup');
 }
 function readForm() {
   const q = nme => document.querySelector(`[name=${nme}]`), r = nme => (document.querySelector(`[name=${nme}]:checked`) || {}).value;
@@ -551,7 +912,7 @@ function exportCSV() {
   const lines = ['date;personne;type;durée;valeur (j);heures;statut;note'];
   [...DB.entries].sort((a, b) => a.date.localeCompare(b.date)).forEach(e => lines.push([
     e.date, q(DB.persons[e.person].name), q(TYPES[e.type]), q(PARTS[e.part]),
-    e.type === 'otdone' ? '' : String(val(e)).replace('.', ','), e.hours != null ? String(e.hours).replace('.', ',') : '',
+    e.type === 'otdone' || e.type === 'otbal' ? '' : String(val(e)).replace('.', ','), e.hours != null ? String(e.hours).replace('.', ',') : '',
     STATUS[e.status] || e.status, q(e.note)].join(';')));
   download(`conges-duo-${todayISO()}.csv`, '\ufeff' + lines.join('\r\n'), 'text/csv');
 }
@@ -585,12 +946,15 @@ function scheduleSync(delay = 2500) {
    les suppressions sont gardées en mémoire pour ne pas réapparaître. */
 function mergeData(local, remote) {
   const L = migrate(local), R = migrate(remote);
-  const out = { version: 1, su: Math.max(L.su, R.su), persons: R.su > L.su ? R.persons : L.persons, entries: [], deleted: {} };
+  const out = { version: 1, su: Math.max(L.su, R.su), persons: R.su > L.su ? R.persons : L.persons, entries: [], trips: [], deleted: {} };
   for (const src of [L.deleted, R.deleted]) for (const id in src) out.deleted[id] = Math.max(out.deleted[id] || 0, +src[id] || 0);
   const map = {};
   for (const e of [...R.entries, ...L.entries]) { const cur = map[e.id]; if (!cur || (+e.u || 0) > (+cur.u || 0)) map[e.id] = e; }
   out.entries = Object.values(map).filter(e => !(out.deleted[e.id] >= (+e.u || 0)))
     .sort((a, b) => a.date.localeCompare(b.date) || a.person.localeCompare(b.person) || a.id.localeCompare(b.id));
+  const tm = {};
+  for (const t of [...R.trips, ...L.trips]) { const cur = tm[t.id]; if (!cur || (+t.u || 0) > (+cur.u || 0)) tm[t.id] = t; }
+  out.trips = Object.values(tm).filter(t => !(out.deleted[t.id] >= (+t.u || 0))).sort((a, b) => a.id.localeCompare(b.id));
   return out;
 }
 
@@ -683,9 +1047,18 @@ function onClick(ev) {
     render();
   }
   else if (a === 'day') openDay(b.dataset.d);
+  else if (a === 'add' && S.view === 'trips') openTrip();
   else if (a === 'add') openDay(S.view === 'cal' && S.year === new Date().getFullYear() && S.calM === new Date().getMonth() + 1 ? todayISO()
     : S.view === 'cal' ? iso(S.year, S.calM, 1) : todayISO());
-  else if (a === 'edit') openEdit(b.dataset.id);
+  else if (a === 'edit') { const e = DB.entries.find(x => x.id === b.dataset.id); if (e && e.times) openHours(e.person, e.date); else if (e && e.type === 'otbal') openReserve(e.person, e.id); else openEdit(b.dataset.id); }
+  else if (a === 'hours') openHours(b.dataset.p, b.dataset.d);
+  else if (a === 'reserve') openReserve(b.dataset.p);
+  else if (a === 'saveReserve') saveReserve(b.dataset.p, b.dataset.id);
+  else if (a === 'recap') openRecap(b.dataset.p);
+  else if (a === 'recapCsv') recapCsv(b.dataset.p);
+  else if (a === 'saveHours') saveHours(b.dataset.p, b.dataset.d);
+  else if (a === 'dstIcs') dstIcs();
+  else if (a === 'notifOn') { if (typeof Notification !== 'undefined') Notification.requestPermission().then(() => { render(); dstNotify(); }); }
   else if (a === 'del') {
     const e = DB.entries.find(x => x.id === b.dataset.id); if (!e) return;
     if (!confirm(`Supprimer : ${DB.persons[e.person].name}, ${TYPES[e.type]} du ${frDate(e.date)} ?`)) return;
@@ -712,6 +1085,32 @@ function onClick(ev) {
       save(); render(); toast(`${n(days)} jour(s) supprimé(s)${label}`);
     }
   }
+  else if (a === 'editTrip') openTrip(b.dataset.id);
+  else if (a === 'saveTrip') saveTrip(b.dataset.id);
+  else if (a === 'delTrip') {
+    const t = DB.trips.find(x => x.id === b.dataset.id); if (!t) return;
+    if (!confirm(`Supprimer le voyage « ${t.title} » et ses réservations ? Les congés posés ne sont pas touchés.`)) return;
+    (t.items || []).forEach(it => { if (it.file && syncOn()) deleteRepoFile(it.file.path); });
+    DB.trips = DB.trips.filter(x => x.id !== t.id); DB.deleted[t.id] = Date.now();
+    save(); $('dlg').close(); render(); toast('Voyage supprimé');
+  }
+  else if (a === 'addItem') openItem(b.dataset.t);
+  else if (a === 'editItem') openItem(b.dataset.t, b.dataset.id);
+  else if (a === 'saveItem') saveItem(b.dataset.t, b.dataset.id);
+  else if (a === 'delItem') {
+    const t = DB.trips.find(x => x.id === b.dataset.t), it = t && t.items.find(x => x.id === b.dataset.id); if (!it) return;
+    if (!confirm(`Supprimer « ${it.title || ITEM_TYPES[it.kind][1]} » ?`)) return;
+    if (it.file && syncOn()) deleteRepoFile(it.file.path);
+    t.items = t.items.filter(x => x.id !== it.id); t.u = Date.now();
+    save(); $('dlg').close(); render(); toast('Supprimé');
+  }
+  else if (a === 'getFile') getFile(b.dataset.t, b.dataset.id);
+  else if (a === 'tripLeave') {
+    const t = DB.trips.find(x => x.id === b.dataset.id); if (!t || !t.start) return;
+    const { created } = addEntries({ persons: whoList(t.who || 'both'), type: 'conge', part: 'full', status: 'auto', date: t.start, end: t.end, note: t.title });
+    render(); toast(created.length ? `${created.length} jour(s) de congé ajoutés (« ${t.title} »)` : 'Aucun jour à poser : déjà posés, repos ou fériés.');
+  }
+  else if (a === 'hideHint') { try { localStorage.setItem('congesDuo.iosHint', '1'); } catch (e) { /* ignore */ } render(); }
   else if (a === 'stale') {
     const t = todayISO(); let k = 0;
     DB.entries.forEach(e => { if (e.status === 'prevu' && e.date <= t) { e.status = 'pris'; e.u = Date.now(); k++; } });
@@ -722,13 +1121,14 @@ function onClick(ev) {
   else if (a === 'csv') exportCSV();
   else if (a === 'sync') { if (syncOn()) syncNow(true); else { S.view = 'set'; render(); toast('Configurez la sauvegarde GitHub en bas des réglages.'); } }
   else if (a === 'forget') {
-    if (!confirm('Retirer la clé GitHub de ce téléphone ? Les données restent ici et sur GitHub.')) return;
+    if (!confirm('Retirer la clé GitHub de ce téléphone ? La synchro s\u2019arrête ici. Vos données restent sur ce téléphone et dans le repo privé.')) return;
+    if (!confirm('Confirmer : retirer la clé ? Il faudra la recoller pour resynchroniser.')) return;
     SY.token = ''; SY.error = ''; saveSync(); render(); toast('Clé retirée de ce téléphone');
   }
   else if (a === 'reset') {
-    if (confirm('Effacer toutes les données ? Si la synchro est active, la copie GitHub est aussi vidée (les anciennes versions restent dans l\u2019historique).') && confirm('Vraiment tout effacer ?')) {
-      DB = defaultData(); DB.su = Date.now(); SY.force = true; save(); render(); toast('Données effacées');
-    }
+    if (!confirm('Effacer les données de CE téléphone ? La sauvegarde GitHub n\u2019est pas touchée, et la clé est retirée de ce téléphone.')) return;
+    if (!confirm('Confirmer l\u2019effacement ? Pour tout récupérer ensuite, il suffira de recoller la clé GitHub.')) return;
+    DB = defaultData(); saveLocal(); SY.token = ''; SY.force = false; SY.dirty = false; SY.error = ''; saveSync(); render(); toast('Données effacées de ce téléphone');
   }
 }
 function onChange(ev) {
@@ -738,8 +1138,11 @@ function onChange(ev) {
     if (t.type === 'checkbox') v = t.checked;
     else if (t.type === 'number') v = parseFloat(String(t.value).replace(',', '.')) || 0;
     else v = t.value;
-    setPath(t.dataset.set, v); DB.su = Date.now(); save();
+    setPath(t.dataset.set, v);
+    if (t.dataset.set.endsWith('.sched.enabled') && v) DB.persons[t.dataset.set.split('.')[0]].ot.enabled = true;
+    DB.su = Date.now(); save();
     if (t.type === 'checkbox' || t.dataset.set.endsWith('.name')) render();
+    else P.forEach(p => { const el = $('calc-' + p); if (el) el.innerHTML = droitCalcText(p); });
   } else if (t.dataset.rest) {
     const p = t.dataset.rest;
     DB.persons[p].rest = [...document.querySelectorAll(`[data-rest="${p}"]:checked`)].map(x => +x.value);
@@ -756,10 +1159,16 @@ function init() {
   loadSync();
   document.addEventListener('click', onClick);
   document.addEventListener('change', onChange);
+  document.addEventListener('input', e => {
+    if (e.target.dataset && e.target.dataset.hours) hoursCalc();
+    if (e.target.dataset && e.target.dataset.res) { const v = parseFloat(String(e.target.value).replace(',', '.')) || 0, h = +e.target.dataset.res || 1, el = $('r_conv'); if (el) el.textContent = `= ${n(v / h)} jour(s) de ${n(h)} h`; }
+  });
+  document.addEventListener('toggle', e => { const d = e.target; if (d && d.dataset && d.dataset.k) { if (d.open) S.open.add(d.dataset.k); else S.open.delete(d.dataset.k); } }, true);
   $('dlg').addEventListener('click', e => { if (e.target === $('dlg')) $('dlg').close(); });
   render();
   setSyncState(SY.dirty ? 'wait' : 'ok');
   scheduleSync(600);
+  dstNotify();
   window.addEventListener('online', () => scheduleSync(300));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleSync(300); });
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
@@ -767,7 +1176,7 @@ function init() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
+  module.exports = { recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
     getDB: () => DB, setDB: d => { DB = migrate(d); } };
 }
 if (typeof document !== 'undefined') init();
