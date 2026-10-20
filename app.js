@@ -972,6 +972,10 @@ function joinWithCode() {
     DB = defaultData(); saveLocal(); render(); toast('Connexion…'); syncNow(true);
   } catch (e) { toast('Code non reconnu : copiez-le en entier.'); }
 }
+function showNotif(t, b) {
+  showDialog(`<h2>${esc(t || 'Congés Duo')}</h2><p style="font-size:16px">${esc(b || '')}</p>
+    <div class="btns end"><button class="btn" data-act="tab" data-v="trips">Voir l\u2019agenda</button><button class="btn pri" data-act="close">OK</button></div>`);
+}
 function homeSetup() {
   if (isIOS() && !isStandalone()) return '';
   let h = '';
@@ -1212,7 +1216,7 @@ function setSyncState(state) {
 function onClick(ev) {
   const b = ev.target.closest('[data-act]'); if (!b) return;
   const a = b.dataset.act;
-  if (a === 'tab') { S.view = b.dataset.v; render(); window.scrollTo(0, 0); }
+  if (a === 'tab') { if ($('dlg').open) $('dlg').close(); S.view = b.dataset.v; render(); window.scrollTo(0, 0); }
   else if (a === 'year') { S.year += +b.dataset.d; render(); }
   else if (a === 'month') {
     S.calM += +b.dataset.d;
@@ -1365,6 +1369,9 @@ function init() {
   document.addEventListener('toggle', e => { const d = e.target; if (d && d.dataset && d.dataset.k) { if (d.open) S.open.add(d.dataset.k); else S.open.delete(d.dataset.k); } }, true);
   $('dlg').addEventListener('click', e => { if (e.target === $('dlg')) $('dlg').close(); });
   render();
+  const nq = new URLSearchParams(location.search).get('notif');
+  if (nq) { try { const j = JSON.parse(nq); showNotif(j.t, j.b); } catch (e) { /* ignore */ } history.replaceState(null, '', location.pathname); }
+  if (navigator.serviceWorker) navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.type === 'notif') showNotif(e.data.title, e.data.body); });
   setSyncState(SY.dirty ? 'wait' : 'ok');
   scheduleSync(600);
   dstNotify();
