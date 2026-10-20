@@ -22,7 +22,11 @@ const daysBetween = (a, b) => Math.round((parse(b) - parse(a)) / 864e5);
 function todayISO() { const d = new Date(); return iso(d.getFullYear(), d.getMonth() + 1, d.getDate()); }
 function frDate(s) { const [y, m, d] = s.split('-'); return `${DOW[dow(s)]} ${d}.${m}.${y}`; }
 function short(s) { const [, m, d] = s.split('-'); return `${DOW[dow(s)]} ${d}.${m}`; }
-const autoStatus = s => (s <= todayISO() ? 'pris' : 'prevu');
+const autoStatus = s => (s <= todayISO() ? 'pris' : 'demande');
+const STATUS = { demande: 'À valider', prevu: 'Validé', pris: 'Pris' };
+const tagHtml = st => st === 'demande'
+  ? '<span class="tag prevu" style="color:var(--star);border-color:var(--star)">À valider</span>'
+  : `<span class="tag ${st}">${STATUS[st] || st}</span>`;
 
 /* ---------- Jours fériés du canton de Vaud ---------- */
 function easter(y) {
@@ -137,10 +141,10 @@ const offFrac = (p, s, idx) => { const i = dayInfo(p, s, idx); return (i.amOff ?
 /* ---------- Compteurs ---------- */
 function counters(p, y) {
   const per = DB.persons[p], ys = String(y), t = todayISO();
-  let pris = 0, prevu = 0, extraP = 0, extraV = 0;
+  let pris = 0, prevu = 0, demande = 0, extraP = 0, extraV = 0;
   for (const e of DB.entries) {
     if (e.person !== p || e.date.slice(0, 4) !== ys) continue;
-    if (e.type === 'conge') { if (e.status === 'pris') pris += val(e); else prevu += val(e); }
+    if (e.type === 'conge') { if (e.status === 'pris') pris += val(e); else { prevu += val(e); if (e.status === 'demande') demande += val(e); } }
     else if (e.type === 'extra') { if (e.status === 'pris') extraP += val(e); else extraV += val(e); }
   }
   const droit = +per.droit || 0, report = +(per.report[ys] || 0);
@@ -154,7 +158,7 @@ function counters(p, y) {
     } else bloc = { missing: true };
   }
   const total = droit + report + extraP;
-  return { droit, report, pris, prevu, total, restant: total - pris - prevu, restantPris: total - pris, extraP, extraV, bloc };
+  return { droit, report, pris, prevu, demande, total, restant: total - pris - prevu, restantPris: total - pris, extraP, extraV, bloc };
 }
 function otBalance(p, until, withPrevu) {
   const o = DB.persons[p].ot;
@@ -283,7 +287,7 @@ function personCard(p, y) {
     <div class="bar"><i class="p" style="width:${wP}%"></i><i class="v" style="width:${wV}%"></i></div>
     ${row(`Droit ${y}`, n(c.droit) + ' j')}${row('Report', n(c.report) + ' j')}
     ${row('Jours travaillés en plus', '+ ' + n(c.extraP) + ' j' + (c.extraV ? `<br><small class="muted">+ ${n(c.extraV)} prévus, comptés une fois faits</small>` : ''))}
-    ${row('Pris', n(c.pris) + ' j')}${row('Prévu', n(c.prevu) + ' j')}`;
+    ${row('Pris', n(c.pris) + ' j')}${row('Prévu', n(c.prevu) + ' j' + (c.demande ? `<br><small style="color:var(--star)">dont ${n(c.demande)} j à valider</small>` : ''))}`;
   if (over) h += row('Sans solde', `<span style="color:var(--hol)">${n(over)} j</span>` + (overPris && over > overPris ? `<br><small class="muted">dont ${n(overPris)} déjà pris</small>` : ''));
   if (c.bloc) {
     h += c.bloc.missing
@@ -304,9 +308,11 @@ function personCard(p, y) {
 }
 
 /* ----- Calendrier ----- */
-function lane(p, i) {
-  return `<span class="lane ${pc(p)}"><i class="h k-${i.am.k} s-${i.am.st || 'x'}"></i><i class="h k-${i.pm.k} s-${i.pm.st || 'x'}"></i></span>`;
+function half(x) {
+  const st = x.st === 'demande' ? 'prevu' : (x.st || 'x');
+  return `<i class="h k-${x.k} s-${st}"${x.st === 'demande' ? ' style="opacity:.45"' : ''}></i>`;
 }
+function lane(p, i) { return `<span class="lane ${pc(p)}">${half(i.am)}${half(i.pm)}</span>`; }
 function renderCal() {
   const y = S.year, m = S.calM, idx = buildIdx(), t = todayISO();
   const first = iso(y, m, 1), offset = (dow(first) + 6) % 7, dim = new Date(Date.UTC(y, m, 0)).getUTCDate();
@@ -329,7 +335,8 @@ function renderCal() {
   const sw = (k, st, p = 'a') => `<span class="lane ${pc(p)} sw"><i class="h k-${k} s-${st}"></i></span>`;
   g += `<div class="legend">
     <span>${sw('conge', 'pris')}${sw('conge', 'pris', 'b')} Congé pris</span>
-    <span>${sw('conge', 'prevu')}${sw('conge', 'prevu', 'b')} Congé prévu</span>
+    <span>${sw('conge', 'prevu')}${sw('conge', 'prevu', 'b')} Congé validé</span>
+    <span><span class="lane pa sw" style="opacity:.45"><i class="h k-conge s-prevu"></i></span><span class="lane pb sw" style="opacity:.45"><i class="h k-conge s-prevu"></i></span> À valider</span>
     <span><span class="lane pa sw"><i class="h k-conge s-pris"></i><i class="h k-work s-x"></i></span> Demi-journée</span>
     <span>${sw('recup', 'pris', 'b')} Récup heures sup</span>
     <span>${sw('bloc', 'pris')} Bloc fin d\u2019année</span>
@@ -351,7 +358,7 @@ function renderPonts() {
     opts.forEach((o, i) => {
       h += `<div class="opt"><div class="opt-h"><b>${o.len} jours ensemble</b><span class="muted">du ${short(o.s)} au ${short(o.e)}</span></div>` +
         P.map(p => `<div class="opt-p ${pc(p)}"><span class="dot"></span><span><b>${nm(p)}</b> : ${o.cost[p] ? `${n(o.cost[p])} j à poser (${o.days[p].map(short).join(', ')})` : 'rien à poser'}</span></div>`).join('') +
-        (o.total > 0 ? `<button class="btn sm" data-act="plan" data-c="${c.start}" data-i="${i}">Ajouter ces jours en prévu</button>` : '<span class="tag ok">Déjà en place</span>') + '</div>';
+        (o.total > 0 ? `<button class="btn sm" data-act="plan" data-c="${c.start}" data-i="${i}">Ajouter ces jours (à valider)</button>` : '<span class="tag ok">Déjà en place</span>') + '</div>';
     });
     h += '</section>';
   }
@@ -380,15 +387,22 @@ function renderList() {
   const es = DB.entries.filter(e => e.date.slice(0, 4) === ys && (f === 'all' || e.person === f))
     .sort((a, b) => b.date.localeCompare(a.date) || a.person.localeCompare(b.person));
   const stale = DB.entries.filter(e => e.status === 'prevu' && e.date <= t).length;
+  const pending = DB.entries.filter(e => e.status === 'demande' && e.date.slice(0, 4) === ys && (f === 'all' || e.person === f)).length;
   let h = `<div class="chips">${[['all', 'Tous'], ['a', nm('a')], ['b', nm('b')]].map(([k, l]) =>
     `<button class="chip${f === k ? ' on' : ''}" data-act="filter" data-v="${k}">${l}</button>`).join('')}</div>`;
-  if (stale) h += `<button class="btn wide" data-act="stale">Passer en « pris » les ${stale} saisie(s) prévue(s) déjà passée(s)</button>`;
+  if (stale) h += `<button class="btn wide" data-act="stale">Passer en « pris » les ${stale} saisie(s) validée(s) déjà passée(s)</button>`;
+  if (pending) h += `<p class="muted">${pending} jour(s) en attente de validation. « Valider » ou « Refuser » s\u2019applique à toute la demande (même personne, même nom).</p>`;
   if (!es.length) return h + `<p class="muted center">Aucune saisie en ${ys}. Touchez + pour en ajouter.</p>`;
   h += '<section class="card list">';
+  const shown = new Set();
   for (const e of es) {
+    const gk = e.person + '|' + (e.note || e.id);
+    const btns = e.status === 'demande' && !shown.has(gk);
+    if (btns) shown.add(gk);
     const detail = e.type === 'otdone' ? `${n(e.hours || 0)} h` : PARTS[e.part];
     h += `<div class="entry ${pc(e.person)}"><span class="dot"></span><div class="grow"><b>${frDate(e.date)}</b> <span class="muted">${nm(e.person)}</span><br>
-      ${TYPES[e.type]}, ${detail} <span class="tag ${e.status}">${e.status === 'pris' ? 'Pris' : 'Prévu'}</span>${e.note ? `<br><small class="muted">${esc(e.note)}</small>` : ''}</div>
+      ${TYPES[e.type]}, ${detail} ${tagHtml(e.status)}${e.note ? `<br><small class="muted">${esc(e.note)}</small>` : ''}
+      ${btns ? `<div class="btns" style="margin:6px 0 0"><button class="btn sm" data-act="validate" data-id="${e.id}">Valider la demande</button><button class="btn sm danger" data-act="refuse" data-id="${e.id}">Refuser</button></div>` : ''}</div>
       <button class="iconbtn" data-act="edit" data-id="${e.id}" aria-label="Modifier">✎</button>
       <button class="iconbtn" data-act="del" data-id="${e.id}" aria-label="Supprimer">✕</button></div>`;
   }
@@ -466,14 +480,14 @@ function entryForm(e, isEdit) {
     ${field('Type', `<select name="f_type">${typeOpts}</select>`)}
     <div class="field" data-row="part"><span class="lbl">Durée</span>${radios('f_part', Object.entries(PARTS), e.part || 'full')}</div>
     ${field('Heures faites', `<input type="number" inputmode="decimal" step="0.25" name="f_hours" value="${e.hours || ''}">`, 'hide" data-row="hours')}
-    ${field('Statut', `<select name="f_status">${isEdit ? '' : '<option value="auto">Auto : passé = pris, futur = prévu</option>'}
-      <option value="pris"${isEdit && e.status === 'pris' ? ' selected' : ''}>Pris</option><option value="prevu"${isEdit && e.status === 'prevu' ? ' selected' : ''}>Prévu</option></select>`)}
+    ${field('Statut', `<select name="f_status">${isEdit ? '' : '<option value="auto">Auto : passé = pris, futur = à valider</option>'}
+      ${['demande', 'prevu', 'pris'].map(k => `<option value="${k}"${isEdit && e.status === k ? ' selected' : ''}>${{ demande: 'À valider (demandé au chef)', prevu: 'Validé (à venir)', pris: 'Pris' }[k]}</option>`).join('')}</select>`)}
     ${field('Note (optionnel)', `<input name="f_note" value="${esc(e.note || '')}">`)}
     <p class="muted hint">Sur une plage de dates, seuls les jours de travail de chacun sont décomptés.</p>`;
 }
 function openDay(s) {
   const idx = buildIdx(), hol = holidayName(s);
-  const list = (idx[s] || []).map(e => `<div class="entry ${pc(e.person)}"><span class="dot"></span><div class="grow">${nm(e.person)} : ${TYPES[e.type]}, ${e.type === 'otdone' ? n(e.hours || 0) + ' h' : PARTS[e.part]} <span class="tag ${e.status}">${e.status === 'pris' ? 'Pris' : 'Prévu'}</span></div>
+  const list = (idx[s] || []).map(e => `<div class="entry ${pc(e.person)}"><span class="dot"></span><div class="grow">${nm(e.person)} : ${TYPES[e.type]}, ${e.type === 'otdone' ? n(e.hours || 0) + ' h' : PARTS[e.part]} ${tagHtml(e.status)}${e.note ? ` <small class="muted">${esc(e.note)}</small>` : ''}</div>
     <button class="iconbtn" data-act="edit" data-id="${e.id}" aria-label="Modifier">✎</button><button class="iconbtn" data-act="del" data-id="${e.id}" aria-label="Supprimer">✕</button></div>`).join('');
   showDialog(`<h2>${frDate(s)}</h2>${hol ? `<p class="holname">${esc(hol)}</p>` : ''}
     <p class="muted">${P.map(p => `${nm(p)} : ${dayStateText(p, s)}`).join('<br>')}</p>
@@ -538,7 +552,7 @@ function exportCSV() {
   [...DB.entries].sort((a, b) => a.date.localeCompare(b.date)).forEach(e => lines.push([
     e.date, q(DB.persons[e.person].name), q(TYPES[e.type]), q(PARTS[e.part]),
     e.type === 'otdone' ? '' : String(val(e)).replace('.', ','), e.hours != null ? String(e.hours).replace('.', ',') : '',
-    e.status === 'pris' ? 'Pris' : 'Prévu', q(e.note)].join(';')));
+    STATUS[e.status] || e.status, q(e.note)].join(';')));
   download(`conges-duo-${todayISO()}.csv`, '\ufeff' + lines.join('\r\n'), 'text/csv');
 }
 function importFile(file) {
@@ -683,6 +697,21 @@ function onClick(ev) {
   else if (a === 'saveEdit') saveEdit(b.dataset.id);
   else if (a === 'plan') planOption(b.dataset.c, +b.dataset.i);
   else if (a === 'filter') { S.filter = b.dataset.v; render(); }
+  else if (a === 'validate' || a === 'refuse') {
+    const e = DB.entries.find(x => x.id === b.dataset.id); if (!e) return;
+    const grp = DB.entries.filter(x => x.status === 'demande' && x.person === e.person && (e.note ? x.note === e.note : x.id === e.id));
+    const days = grp.reduce((t, x) => t + (x.type === 'otdone' ? 0 : val(x)), 0);
+    const label = e.note ? ` « ${e.note} »` : '';
+    if (a === 'validate') {
+      grp.forEach(x => { x.status = x.date <= todayISO() ? 'pris' : 'prevu'; x.u = Date.now(); });
+      save(); render(); toast(`${n(days)} jour(s) validé(s)${label}`);
+    } else {
+      if (!confirm(`Demande refusée${label} : supprimer ${n(days)} jour(s) pour ${DB.persons[e.person].name} ?`)) return;
+      const ids = new Set(grp.map(x => x.id));
+      DB.entries = DB.entries.filter(x => !ids.has(x.id)); ids.forEach(id => { DB.deleted[id] = Date.now(); });
+      save(); render(); toast(`${n(days)} jour(s) supprimé(s)${label}`);
+    }
+  }
   else if (a === 'stale') {
     const t = todayISO(); let k = 0;
     DB.entries.forEach(e => { if (e.status === 'prevu' && e.date <= t) { e.status = 'pris'; e.u = Date.now(); k++; } });
