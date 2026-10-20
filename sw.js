@@ -1,6 +1,6 @@
 /* Congés Duo — service worker : réseau d'abord, cache en secours (hors ligne),
    et affichage des notifications de rappel. Changer la version à chaque mise à jour importante. */
-const CACHE = 'conges-duo-v3';
+const CACHE = 'conges-duo-v4';
 const ASSETS = ['./', './index.html', './app.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -41,8 +41,12 @@ self.addEventListener('notificationclick', e => {
   n.close();
   const msg = { type: 'notif', title: n.title, body: n.body };
   const url = './?notif=' + encodeURIComponent(JSON.stringify({ t: n.title, b: n.body }));
-  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-    for (const c of list) if ('focus' in c) { c.postMessage(msg); return c.focus(); }
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async list => {
+    for (const c of list) {
+      // L'app est déjà ouverte : on la recharge avec le message, pour qu'il s'affiche même si elle était en arrière-plan.
+      if ('navigate' in c) { try { const w = await c.navigate(url); if (w) return w.focus(); } catch (err) { /* on tente autrement */ } }
+      if ('focus' in c) { c.postMessage(msg); return c.focus(); }
+    }
     return self.clients.openWindow(url);
   }));
 });
