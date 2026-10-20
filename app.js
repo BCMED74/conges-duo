@@ -4,7 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'congesDuo.v1';
-const APP_VERSION = '2026-10-20 n°6';
+const APP_VERSION = '2026-10-20 n°7';
 const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
@@ -344,8 +344,9 @@ function dstCard() {
     ${canNotif ? '<button class="btn sm" data-act="notifOn">Activer les notifications</button>' : ''}</div></section>`;
 }
 function renderHome() {
+  if (S.invite && !isStandalone()) return inviteGuide();
   const order = SY.me === 'b' ? ['b', 'a'] : ['a', 'b'];
-  return iosHint() + homeSetup() + dstCard() + order.map(p => personCard(p, S.year)).join('') +
+  return (S.invite ? '' : iosHint()) + homeSetup() + dstCard() + order.map(p => personCard(p, S.year)).join('') +
     `<p class="muted center">Fériés vaudois calculés automatiquement. Touchez un jour du calendrier ou + pour saisir.</p>`;
 }
 function personCard(p, y) {
@@ -959,12 +960,11 @@ function inviteCode() {
   const other = SY.me === 'a' ? 'b' : SY.me === 'b' ? 'a' : null;
   if (!other) return toast('Choisissez d\u2019abord à qui appartient ce téléphone.');
   const code = 'CD1.' + b64u(new TextEncoder().encode(JSON.stringify({ o: SY.owner, r: SY.repo, p: SY.path, t: SY.token, me: other, dev: 'Téléphone ' + DB.persons[other].name })));
+  const link = location.origin + location.pathname.replace(/index\.html$/, '') + '#invite=' + code;
   showDialog(`<h2>Invitation pour ${nm(other)}</h2>
-    <p class="muted">Envoyez ce code à ${nm(other)} par un canal privé, puis supprimez le message : il contient la clé d\u2019accès à vos données.</p>
-    <textarea readonly rows="5" id="inv">${code}</textarea>
-    <div class="btns"><button class="btn sm pri" data-act="copy" data-src="inv">Copier le code</button>
-    ${navigator.share ? '<button class="btn sm" data-act="shareInv">Partager…</button>' : ''}</div>
-    <p class="muted">Sur son téléphone : installer l\u2019app sur l\u2019écran d\u2019accueil, l\u2019ouvrir, coller le code dans « Rejoindre » puis activer les notifications.</p>
+    <p class="muted">Envoyez ce lien à ${nm(other)} (WhatsApp, SMS…). En l\u2019ouvrant, son téléphone affiche un guide d\u2019installation pas à pas. Supprimez ensuite le message : le lien contient la clé d\u2019accès à vos données.</p>
+    <textarea readonly rows="4" id="inv">${link}</textarea>
+    <div class="btns">${navigator.share ? '<button class="btn sm pri" data-act="shareInv">Envoyer le lien…</button>' : ''}<button class="btn sm" data-act="copy" data-src="inv">Copier le lien</button></div>
     <div class="btns end"><button class="btn" data-act="close">Fermer</button></div>`);
 }
 function joinWithCode() {
@@ -995,11 +995,23 @@ function lastNotifCard() {
   return `<section class="card dst"><b>🔔 ${esc(d.title)}</b><br>${esc(d.body)}<br><small class="muted">Dernier rappel reçu ${ago}</small>
     <div class="btns"><button class="btn sm" data-act="tab" data-v="trips">Voir l\u2019agenda</button><button class="btn sm" data-act="notifSeen">OK, lu</button></div></section>`;
 }
+function inviteGuide() {
+  const ios = isIOS(), n = (() => { try { return JSON.parse(new TextDecoder().decode(ub64u(S.invite.slice(4)))).dev.replace('Téléphone ', ''); } catch (e) { return ''; } })();
+  return `<section class="card hint-ios" style="font-size:16px"><h2>Bienvenue${n ? ' ' + esc(n) : ''} 👋</h2>
+    <p>Trois étapes pour installer Congés Duo et retrouver vos congés et rendez-vous.</p>
+    <p><b>1.</b> Copiez votre code personnel :</p>
+    <div class="btns"><button class="btn pri" data-act="copyInvite">${S.inviteCopied ? '✓ Code copié' : 'Copier mon code'}</button></div>
+    <p><b>2.</b> ${ios ? 'Touchez le bouton <b>Partager</b> de Safari (le carré avec une flèche ⬆️, en bas de l\u2019écran), puis <b>« Sur l\u2019écran d\u2019accueil »</b> et <b>Ajouter</b>.<br><small class="muted">Si vous ne voyez pas ce bouton (lien ouvert depuis WhatsApp), touchez d\u2019abord l\u2019icône Safari 🧭 en bas à droite.</small>'
+      : 'Ouvrez le menu ⋮ du navigateur, puis <b>« Installer l\u2019application »</b> ou <b>« Ajouter à l\u2019écran d\u2019accueil »</b>.'}</p>
+    <p><b>3.</b> Ouvrez <b>Congés Duo</b> depuis la nouvelle icône, touchez <b>« Coller mon code et rejoindre »</b>, puis <b>Activer les notifications</b>.</p></section>`;
+}
 function homeSetup() {
+  if (S.invite && !isStandalone()) return inviteGuide();
   if (isIOS() && !isStandalone()) return '';
   let h = lastNotifCard();
   if (!syncOn() && !DB.entries.length) h += `<section class="card hint-ios"><b>Rejoindre avec un code d\u2019invitation</b><br><span class="muted">Collez le code reçu, l\u2019app récupère toutes vos données.</span>
-    <textarea id="joinCode" rows="3" placeholder="CD1.…" style="margin-top:8px"></textarea><div class="btns"><button class="btn pri" data-act="join">Rejoindre</button></div></section>`;
+    <div class="btns"><button class="btn pri" data-act="pasteJoin">Coller mon code et rejoindre</button></div>
+    <textarea id="joinCode" rows="3" placeholder="ou collez le code ici : CD1.…" style="margin-top:8px"></textarea><div class="btns"><button class="btn" data-act="join">Rejoindre</button></div></section>`;
   if (DB.push && DB.push.publicKey && SY.me && !pushOk()) h += `<section class="card hint-ios"><b>🔔 Notifications</b><br>Activez-les pour recevoir les rappels de rendez-vous sur ce téléphone.
     <div class="btns"><button class="btn pri" data-act="pushOn">Activer les notifications</button></div></section>`;
   return h;
@@ -1301,7 +1313,9 @@ function onClick(ev) {
     DB.subs[b.dataset.id] = { ...DB.subs[b.dataset.id], sub: null, u: Date.now() }; save(); render();
   }
   else if (a === 'invite') inviteCode();
-  else if (a === 'shareInv') { navigator.share({ text: $('inv').value }).catch(() => {}); }
+  else if (a === 'shareInv') { navigator.share({ text: `Installe Congés Duo (nos congés et rendez-vous) : ouvre ce lien dans Safari et suis le guide.\n${$('inv').value}` }).catch(() => {}); }
+  else if (a === 'copyInvite') { const c = S.invite; (navigator.clipboard ? navigator.clipboard.writeText(c) : Promise.reject()).then(() => { S.inviteCopied = true; render(); toast('Code copié'); }, () => toast('Copie impossible : gardez cette page ouverte.')); }
+  else if (a === 'pasteJoin') { (navigator.clipboard && navigator.clipboard.readText ? navigator.clipboard.readText() : Promise.reject()).then(t => { $('joinCode').value = t; joinWithCode(); }, () => toast('Collez le code à la main dans le champ (appui long › Coller).')); }
   else if (a === 'copy') { const el = $(b.dataset.src); if (el) { (navigator.clipboard ? navigator.clipboard.writeText(el.value) : Promise.reject()).then(() => toast('Copié'), () => { el.select(); document.execCommand('copy'); toast('Copié'); }); } }
   else if (a === 'join') joinWithCode();
   else if (a === 'notifSeen') { S.lastNotif = null; if (typeof caches !== 'undefined') caches.open('cd-notifs').then(c => c.delete('./__derniere-notification')).catch(() => {}); render(); }
@@ -1380,6 +1394,12 @@ function onChange(ev) {
 function init() {
   load();
   loadSync();
+  const inv = (location.hash.match(/invite=(CD1\.[A-Za-z0-9_-]+)/) || [])[1];
+  if (inv) {
+    history.replaceState(null, '', location.pathname + location.search);
+    if (isStandalone() && !syncOn()) setTimeout(() => { const el = $('joinCode'); if (el) { el.value = inv; joinWithCode(); } }, 0);
+    else if (!isStandalone()) S.invite = inv;
+  }
   document.addEventListener('click', onClick);
   document.addEventListener('change', onChange);
   document.addEventListener('input', e => {
