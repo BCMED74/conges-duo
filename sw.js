@@ -1,6 +1,6 @@
 /* Congés Duo — service worker : réseau d'abord, cache en secours (hors ligne),
    et affichage des notifications de rappel. Changer la version à chaque mise à jour importante. */
-const CACHE = 'conges-duo-v4';
+const CACHE = 'conges-duo-v5', NOTIF = 'cd-notifs', LAST = './__derniere-notification';
 const ASSETS = ['./', './index.html', './app.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -9,7 +9,7 @@ self.addEventListener('install', e => {
 
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys()
-    .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+    .then(keys => Promise.all(keys.filter(k => k !== CACHE && k !== NOTIF).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 
@@ -29,10 +29,15 @@ self.addEventListener('fetch', e => {
 self.addEventListener('push', e => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (err) { d = { body: e.data ? e.data.text() : '' }; }
-  e.waitUntil(self.registration.showNotification(d.title || 'Congés Duo', {
-    body: d.body || '', icon: 'icon-192.png', badge: 'icon-192.png', tag: d.tag || undefined, requireInteraction: true,
-    vibrate: [200, 100, 200], data: { url: d.url || './' },
-  }));
+  const last = { title: d.title || 'Congés Duo', body: d.body || '', at: Date.now() };
+  e.waitUntil(Promise.all([
+    self.registration.showNotification(last.title, {
+      body: last.body, icon: 'icon-192.png', badge: 'icon-192.png', tag: d.tag || undefined, requireInteraction: true,
+      vibrate: [200, 100, 200], data: { url: d.url || './' },
+    }),
+    // Garde le dernier rappel : l'app l'affiche sur l'accueil, même si la notification a été fermée.
+    caches.open(NOTIF).then(c => c.put(LAST, new Response(JSON.stringify(last), { headers: { 'Content-Type': 'application/json' } }))),
+  ]));
 });
 
 // Au toucher : l'app s'ouvre et réaffiche le message en grand.

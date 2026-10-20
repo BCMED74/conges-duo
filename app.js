@@ -4,6 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'congesDuo.v1';
+const APP_VERSION = '2026-10-20 n°6';
 const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
@@ -318,6 +319,8 @@ function render() {
   const v = { home: renderHome, cal: renderCal, ponts: renderPonts, list: renderList, trips: renderAgenda, set: renderSet }[S.view];
   $('view').innerHTML = v();
   setSyncState();
+  const sv = $('swver');
+  if (sv && typeof caches !== 'undefined') caches.keys().then(k => { sv.textContent = 'cache ' + (k.filter(x => x.startsWith('conges-duo')).join(', ') || 'aucun'); }).catch(() => {});
 }
 
 /* ----- Accueil ----- */
@@ -554,6 +557,7 @@ function renderSet() {
   h += sect('device', '<span class="grow">Cet appareil</span>', `
     <div class="field"><span class="lbl">Ce téléphone est celui de</span>${radios('me', [['a', nm('a')], ['b', nm('b')]], SY.me)}</div>
     <p class="muted">Sa carte s\u2019affiche en premier et les rappels qui le concernent arrivent ici. Ce réglage reste sur ce téléphone.</p>
+    <p class="muted">Version de l\u2019app : ${APP_VERSION}, <span id="swver">…</span></p>
     <div class="btns"><button class="btn sm" data-act="invite">Inviter ${SY.me ? nm(SY.me === 'a' ? 'b' : 'a') : 'l\u2019autre personne'} sur son téléphone</button></div>`);
   const subs = Object.entries(DB.subs || {}).filter(([, v]) => v && v.sub);
   h += sect('notif', '<span class="grow">Notifications</span>', `
@@ -976,9 +980,24 @@ function showNotif(t, b) {
   showDialog(`<h2>${esc(t || 'Congés Duo')}</h2><p style="font-size:16px">${esc(b || '')}</p>
     <div class="btns end"><button class="btn" data-act="tab" data-v="trips">Voir l\u2019agenda</button><button class="btn pri" data-act="close">OK</button></div>`);
 }
+function loadLastNotif() {
+  if (typeof caches === 'undefined') return;
+  caches.open('cd-notifs').then(c => c.match('./__derniere-notification')).then(r => (r ? r.json() : null)).then(d => {
+    const was = JSON.stringify(S.lastNotif || null);
+    S.lastNotif = d && d.at > Date.now() - 7 * 864e5 ? d : null;
+    if (JSON.stringify(S.lastNotif) !== was && S.view === 'home') render();
+  }).catch(() => {});
+}
+function lastNotifCard() {
+  const d = S.lastNotif; if (!d) return '';
+  const min = Math.round((Date.now() - d.at) / 60000);
+  const ago = min < 1 ? 'à l\u2019instant' : min < 60 ? `il y a ${min} min` : min < 1440 ? `il y a ${Math.round(min / 60)} h` : `il y a ${Math.round(min / 1440)} j`;
+  return `<section class="card dst"><b>🔔 ${esc(d.title)}</b><br>${esc(d.body)}<br><small class="muted">Dernier rappel reçu ${ago}</small>
+    <div class="btns"><button class="btn sm" data-act="tab" data-v="trips">Voir l\u2019agenda</button><button class="btn sm" data-act="notifSeen">OK, lu</button></div></section>`;
+}
 function homeSetup() {
   if (isIOS() && !isStandalone()) return '';
-  let h = '';
+  let h = lastNotifCard();
   if (!syncOn() && !DB.entries.length) h += `<section class="card hint-ios"><b>Rejoindre avec un code d\u2019invitation</b><br><span class="muted">Collez le code reçu, l\u2019app récupère toutes vos données.</span>
     <textarea id="joinCode" rows="3" placeholder="CD1.…" style="margin-top:8px"></textarea><div class="btns"><button class="btn pri" data-act="join">Rejoindre</button></div></section>`;
   if (DB.push && DB.push.publicKey && SY.me && !pushOk()) h += `<section class="card hint-ios"><b>🔔 Notifications</b><br>Activez-les pour recevoir les rappels de rendez-vous sur ce téléphone.
@@ -1285,6 +1304,7 @@ function onClick(ev) {
   else if (a === 'shareInv') { navigator.share({ text: $('inv').value }).catch(() => {}); }
   else if (a === 'copy') { const el = $(b.dataset.src); if (el) { (navigator.clipboard ? navigator.clipboard.writeText(el.value) : Promise.reject()).then(() => toast('Copié'), () => { el.select(); document.execCommand('copy'); toast('Copié'); }); } }
   else if (a === 'join') joinWithCode();
+  else if (a === 'notifSeen') { S.lastNotif = null; if (typeof caches !== 'undefined') caches.open('cd-notifs').then(c => c.delete('./__derniere-notification')).catch(() => {}); render(); }
   else if (a === 'saveTrip') saveTrip(b.dataset.id);
   else if (a === 'delTrip') {
     const t = DB.trips.find(x => x.id === b.dataset.id); if (!t) return;
@@ -1376,7 +1396,8 @@ function init() {
   scheduleSync(600);
   dstNotify();
   window.addEventListener('online', () => scheduleSync(300));
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleSync(300); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { scheduleSync(300); loadLastNotif(); } });
+  loadLastNotif();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
