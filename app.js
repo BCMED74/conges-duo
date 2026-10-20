@@ -75,7 +75,7 @@ function defaultPerson(name, droit, bloc, ot) {
   };
 }
 function defaultData() {
-  return { version: 1, su: 0, persons: { a: defaultPerson('Personne 1', 20, true, false), b: defaultPerson('Personne 2', 25, false, true) }, entries: [], trips: [], deleted: {} };
+  return { version: 1, su: 0, persons: { a: defaultPerson('Personne 1', 20, true, false), b: defaultPerson('Personne 2', 25, false, true) }, entries: [], trips: [], appts: [], subs: {}, push: {}, deleted: {} };
 }
 function deepMerge(base, over) {
   const out = { ...base };
@@ -88,7 +88,8 @@ function deepMerge(base, over) {
 }
 function migrate(d) {
   const def = defaultData();
-  const out = { version: 1, su: +d.su || 0, persons: {}, entries: Array.isArray(d.entries) ? d.entries : [], trips: Array.isArray(d.trips) ? d.trips : [],
+  const out = { version: 1, su: +d.su || 0, persons: {}, entries: Array.isArray(d.entries) ? d.entries : [], trips: Array.isArray(d.trips) ? d.trips : [], appts: Array.isArray(d.appts) ? d.appts : [],
+    subs: d.subs && typeof d.subs === 'object' ? d.subs : {}, push: d.push && typeof d.push === 'object' ? d.push : {},
     deleted: d.deleted && typeof d.deleted === 'object' && !Array.isArray(d.deleted) ? d.deleted : {} };
   for (const p of P) out.persons[p] = deepMerge(def.persons[p], (d.persons && d.persons[p]) || {});
   return out;
@@ -314,7 +315,7 @@ function render() {
   $('yearLbl').textContent = S.year;
   document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === S.view));
   $('fab').classList.toggle('hide', S.view === 'set' || S.view === 'ponts');
-  const v = { home: renderHome, cal: renderCal, ponts: renderPonts, list: renderList, trips: renderTrips, set: renderSet }[S.view];
+  const v = { home: renderHome, cal: renderCal, ponts: renderPonts, list: renderList, trips: renderAgenda, set: renderSet }[S.view];
   $('view').innerHTML = v();
   setSyncState();
 }
@@ -340,7 +341,8 @@ function dstCard() {
     ${canNotif ? '<button class="btn sm" data-act="notifOn">Activer les notifications</button>' : ''}</div></section>`;
 }
 function renderHome() {
-  return iosHint() + dstCard() + P.map(p => personCard(p, S.year)).join('') +
+  const order = SY.me === 'b' ? ['b', 'a'] : ['a', 'b'];
+  return iosHint() + homeSetup() + dstCard() + order.map(p => personCard(p, S.year)).join('') +
     `<p class="muted center">Fériés vaudois calculés automatiquement. Touchez un jour du calendrier ou + pour saisir.</p>`;
 }
 function personCard(p, y) {
@@ -403,11 +405,11 @@ function renderCal() {
   const hols = [], trips = (DB.trips || []).filter(x => x.start);
   for (let d = 1; d <= dim; d++) {
     const s = iso(y, m, d), hol = holidayName(s), ia = dayInfo('a', s, idx), ib = dayInfo('b', s, idx);
-    const trip = trips.some(x => s >= x.start && s <= (x.end || x.start));
+    const trip = trips.some(x => s >= x.start && s <= (x.end || x.start)), appt = (DB.appts || []).some(x => x.date === s);
     if (hol) hols.push(`${short(s)} : ${hol}`);
     const both = ia.amOff && ia.pmOff && ib.amOff && ib.pmOff;
     g += `<button class="day${hol ? ' hol' : ''}${s === t ? ' today' : ''}${both ? ' both' : ''}" data-act="day" data-d="${s}">
-      <span class="num">${d}</span>${trip ? '<span class="tripm" title="Voyage">✈</span>' : ''}${both ? '<span class="star" title="Off tous les deux">★</span>' : ''}${ia.ot || ib.ot ? '<span class="otm">h</span>' : ''}
+      <span class="num">${d}${trip || appt ? `<small class="mk">${trip ? '✈' : ''}${appt ? '📌' : ''}</small>` : ''}</span>${both ? '<span class="star" title="Off tous les deux">★</span>' : ''}${ia.ot || ib.ot ? '<span class="otm">h</span>' : ''}
       ${lane('a', ia)}${lane('b', ib)}</button>`;
   }
   g += '</div>';
@@ -425,7 +427,8 @@ function renderCal() {
     <span>${sw('hol', 'x')} Férié</span>
     <span><b class="starl">★</b> Off tous les deux</span>
     <span><b class="otl">h</b> Heures sup</span>
-    <span><b>✈</b> Voyage</span></div>`;
+    <span><b>✈</b> Voyage</span>
+    <span><b>📌</b> Rendez-vous</span></div>`;
   return g;
 }
 
@@ -548,6 +551,18 @@ function renderSet() {
         ${schedFields(p, 'summer')}${schedFields(p, 'winter')}</div>` : ''}`;
     h += sect('p-' + p, `<span class="dot"></span><span class="grow">${nm(p)}</span>`, body, pc(p));
   }
+  h += sect('device', '<span class="grow">Cet appareil</span>', `
+    <div class="field"><span class="lbl">Ce téléphone est celui de</span>${radios('me', [['a', nm('a')], ['b', nm('b')]], SY.me)}</div>
+    <p class="muted">Sa carte s\u2019affiche en premier et les rappels qui le concernent arrivent ici. Ce réglage reste sur ce téléphone.</p>
+    <div class="btns"><button class="btn sm" data-act="invite">Inviter ${SY.me ? nm(SY.me === 'a' ? 'b' : 'a') : 'l\u2019autre personne'} sur son téléphone</button></div>`);
+  const subs = Object.entries(DB.subs || {}).filter(([, v]) => v && v.sub);
+  h += sect('notif', '<span class="grow">Notifications</span>', `
+    <p class="muted">Les rappels de rendez-vous et de changement d\u2019horaire sont envoyés par une tâche automatique de votre repo privé, toutes les 30 minutes.</p>
+    <div class="row"><span>Clés de notification</span><b>${DB.push && DB.push.publicKey ? 'créées' : 'à créer'}</b></div>
+    <div class="row"><span>Ce téléphone</span><b>${pushOk() ? 'activé' : 'non activé'}</b></div>
+    ${subs.map(([k, v]) => `<div class="row"><span>${esc(v.name || '')} (${esc((DB.persons[v.person] || {}).name || '')})</span><b><button class="btn sm danger" data-act="delSub" data-id="${k}">Retirer</button></b></div>`).join('')}
+    <div class="btns"><button class="btn sm pri" data-act="pushOn">Activer sur ce téléphone</button>
+    <button class="btn sm" data-act="genKeys">${DB.push && DB.push.publicKey ? 'Recréer les clés' : 'Créer les clés'}</button></div>`);
   h += dstSettings();
   const hist = SY.owner && SY.repo ? `https://github.com/${encodeURIComponent(SY.owner)}/${encodeURIComponent(SY.repo)}/commits/main/${SY.path.split('/').map(encodeURIComponent).join('/')}` : '';
   h += sect('sync', '<span class="grow">Sauvegarde privée sur GitHub</span>', `
@@ -607,8 +622,8 @@ function renderTrips() {
   const t = todayISO(), all = DB.trips || [];
   const up = all.filter(x => !x.end || x.end >= t).sort((a, b) => (a.start || '9').localeCompare(b.start || '9'));
   const past = all.filter(x => x.end && x.end < t).sort((a, b) => b.start.localeCompare(a.start));
-  let h = `<p class="muted">Vos voyages : destination, programme, billets, réservations d\u2019hôtel. Les fichiers joints sont rangés dans votre repo privé.</p>`;
-  if (!all.length) return h + '<p class="muted center">Aucun voyage pour l\u2019instant. Touchez + pour en créer un.</p>';
+  let h = `<p class="muted">Destination, programme, billets, réservations d\u2019hôtel. Les fichiers joints sont rangés dans votre repo privé.</p>`;
+  if (!all.length) return h + '<p class="muted">Aucun voyage pour l\u2019instant.</p>';
   h += up.map(tripCard).join('');
   if (past.length) h += sect('past', `<span class="grow">Voyages passés (${past.length})</span>`, past.map(tripCard).join(''));
   return h;
@@ -816,6 +831,157 @@ function recapCsv(p) {
   download(`heures-sup-${safeName(DB.persons[p].name)}-${y}.csv`, '\ufeff' + lines.join('\r\n'), 'text/csv');
 }
 
+/* ----- Agenda : rendez-vous communs ----- */
+const REM_UNITS = { m: 'minute(s)', h: 'heure(s)', d: 'jour(s)' };
+const remText = r => `${r.n} ${r.u === 'd' ? (r.n > 1 ? 'jours' : 'jour') : r.u === 'h' ? 'h' : 'min'} avant`;
+function apptWarn(a) {
+  if (!a.date) return [];
+  const idx = buildIdx();
+  return whoList(a.who || 'both').filter(p => isWorkday(p, a.date) && offFrac(p, a.date, idx) < 1).map(p => `${nm(p)} travaille ce jour-là`);
+}
+function apptCard(a) {
+  const warn = apptWarn(a), rems = (a.reminders || []).map(remText).join(', ');
+  return `<section class="card appt"><div class="trip-h"><div class="grow"><h2>📌 ${esc(a.title)}</h2>
+    <div class="muted">${a.date ? frDate(a.date) : 'date à définir'}${a.time ? ` à ${a.time}${a.end ? `–${a.end}` : ''}` : ''}${a.place ? `<br>📍 ${esc(a.place)}` : ''}</div>
+    <div class="who-l">${whoDots(a.who || 'both')}</div>
+    ${warn.map(w => `<div class="warn">⚠ ${w} : pensez à poser un congé.</div>`).join('')}
+    <div class="muted">🔔 ${rems || 'aucun rappel'}</div></div>
+    <button class="iconbtn" data-act="editAppt" data-id="${a.id}" aria-label="Modifier le rendez-vous">✎</button></div>
+    ${a.notes ? `<p class="tnotes">${esc(a.notes)}</p>` : ''}
+    <div class="btns">${a.date ? `<a class="btn sm" href="${apptGcal(a)}" target="_blank" rel="noopener">Google Agenda</a><button class="btn sm" data-act="apptIcs" data-id="${a.id}">Agenda iPhone (.ics)</button>` : ''}</div></section>`;
+}
+function renderAgenda() {
+  const t = todayISO(), ap = DB.appts || [];
+  const up = ap.filter(a => !a.date || a.date >= t).sort((a, b) => ((a.date || '9') + (a.time || '')).localeCompare((b.date || '9') + (b.time || '')));
+  const past = ap.filter(a => a.date && a.date < t).sort((a, b) => b.date.localeCompare(a.date));
+  let h = `<div class="btns"><button class="btn pri" data-act="newAppt">+ Rendez-vous</button><button class="btn" data-act="newTrip">+ Voyage</button></div>
+    <h3 class="sec">Rendez-vous</h3>`;
+  h += up.length ? up.map(apptCard).join('') : '<p class="muted">Aucun rendez-vous à venir.</p>';
+  if (past.length) h += sect('pastAppt', `<span class="grow">Rendez-vous passés (${past.length})</span>`, past.map(apptCard).join(''));
+  return h + `<h3 class="sec">Voyages</h3>` + renderTrips();
+}
+function remRow(r) {
+  return `<div class="two rem" style="grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto;align-items:end">
+    ${field('Rappel', `<input type="number" inputmode="numeric" min="1" name="rm_n" value="${r.n}">`)}
+    ${field('&nbsp;', `<select name="rm_u">${Object.entries(REM_UNITS).map(([k, l]) => `<option value="${k}"${k === r.u ? ' selected' : ''}>${l} avant</option>`).join('')}</select>`)}
+    <button class="iconbtn" data-act="delRem" aria-label="Retirer ce rappel" style="margin-bottom:2px">✕</button></div>`;
+}
+function openAppt(id) {
+  const a = (DB.appts || []).find(x => x.id === id) || { who: 'both', date: todayISO(), reminders: [{ n: 1, u: 'd' }, { n: 2, u: 'h' }] };
+  showDialog(`<h2>${id ? 'Modifier le rendez-vous' : 'Nouveau rendez-vous'}</h2>
+    ${field('Titre', `<input name="a_title" value="${esc(a.title || '')}" placeholder="ex. Notaire, mariage, rendez-vous banque">`)}
+    <div class="two">${field('Date', `<input type="date" name="a_date" value="${a.date || ''}">`)}${field('Lieu', `<input name="a_place" value="${esc(a.place || '')}">`)}</div>
+    <div class="two">${field('Heure', `<input type="time" name="a_time" value="${a.time || ''}">`)}${field('Fin (optionnel)', `<input type="time" name="a_end" value="${a.end || ''}">`)}</div>
+    <div class="field"><span class="lbl">Qui doit être présent</span>${radios('a_who', [['a', nm('a')], ['b', nm('b')], ['both', 'Les deux']], a.who || 'both')}</div>
+    <div id="rems">${(a.reminders || []).map(remRow).join('')}</div>
+    <div class="btns"><button class="btn sm" data-act="addRem">+ Ajouter un rappel</button></div>
+    <p class="muted">Les rappels arrivent en notification sur le téléphone de chaque personne concernée (à 30 minutes près).</p>
+    ${field('Notes', `<textarea name="a_notes" rows="3">${esc(a.notes || '')}</textarea>`)}
+    <div class="btns end">${id ? `<button class="btn danger" data-act="delAppt" data-id="${id}">Supprimer</button>` : ''}
+    <button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveAppt" data-id="${id || ''}">Enregistrer</button></div>`);
+}
+function saveAppt(id) {
+  const q = k => document.querySelector(`[name=${k}]`);
+  const title = q('a_title').value.trim(); if (!title) return toast('Donnez un titre au rendez-vous.');
+  const ns = [...document.querySelectorAll('[name=rm_n]')], us = [...document.querySelectorAll('[name=rm_u]')];
+  const reminders = ns.map((el, i) => ({ n: Math.max(1, parseInt(el.value, 10) || 0), u: us[i].value })).filter(r => r.n > 0);
+  DB.appts = DB.appts || [];
+  let a = DB.appts.find(x => x.id === id);
+  if (!a) { a = { id: uid() }; DB.appts.push(a); }
+  Object.assign(a, { title, date: q('a_date').value, time: q('a_time').value, end: q('a_end').value, place: q('a_place').value.trim(),
+    who: (document.querySelector('[name=a_who]:checked') || {}).value || 'both', notes: q('a_notes').value.trim(), reminders, u: Date.now() });
+  save(); $('dlg').close(); render();
+  const w = apptWarn(a); toast(w.length ? `Enregistré. Attention : ${w.join(', ')}.` : 'Rendez-vous enregistré');
+}
+const ymd = s => s.replace(/-/g, '');
+function apptGcal(a) {
+  const d = ymd(a.date);
+  const dates = a.time ? `${d}T${a.time.replace(':', '')}00/${d}T${(a.end || a.time).replace(':', '')}00` : `${d}/${ymd(addDays(a.date, 1))}`;
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(a.title)}&dates=${dates}&ctz=Europe/Zurich&location=${encodeURIComponent(a.place || '')}&details=${encodeURIComponent(a.notes || '')}`;
+}
+function apptIcs(id) {
+  const a = (DB.appts || []).find(x => x.id === id); if (!a || !a.date) return;
+  const d = ymd(a.date), clean = s => String(s || '').replace(/[\\;,]/g, m => '\\' + m).replace(/\n/g, '\\n');
+  const start = a.time ? `DTSTART:${d}T${a.time.replace(':', '')}00` : `DTSTART;VALUE=DATE:${d}`;
+  const end = a.time ? `DTEND:${d}T${(a.end || a.time).replace(':', '')}00` : `DTEND;VALUE=DATE:${ymd(addDays(a.date, 1))}`;
+  const alarms = (a.reminders || []).map(r => ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${clean(a.title)}`,
+    `TRIGGER:-P${r.u === 'd' ? `${r.n}D` : `T${r.n}${r.u === 'h' ? 'H' : 'M'}`}`, 'END:VALARM'].join('\r\n'));
+  download(`rendez-vous-${d}.ics`, ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Conges Duo//FR', 'BEGIN:VEVENT', `UID:${a.id}@conges-duo`,
+    `DTSTAMP:${d}T000000Z`, start, end, `SUMMARY:${clean(a.title)}`, a.place ? `LOCATION:${clean(a.place)}` : '', a.notes ? `DESCRIPTION:${clean(a.notes)}` : '',
+    ...alarms, 'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).join('\r\n'), 'text/calendar');
+}
+
+/* ----- Notifications push (envoyées par la tâche du repo privé) ----- */
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const ub64u = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0));
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+const pushOk = () => !!(DB.push && DB.push.publicKey && SY.deviceId && DB.subs && DB.subs[SY.deviceId] && DB.subs[SY.deviceId].sub && SY.pushKey === DB.push.publicKey
+  && typeof Notification !== 'undefined' && Notification.permission === 'granted');
+async function genVapid() {
+  if (DB.push && DB.push.publicKey && !confirm('Des clés existent déjà. En créer de nouvelles ? Il faudra mettre à jour les secrets GitHub et réactiver les notifications sur chaque téléphone.')) return;
+  const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const pub = b64u(await crypto.subtle.exportKey('raw', kp.publicKey)), priv = (await crypto.subtle.exportKey('jwk', kp.privateKey)).d;
+  DB.push = { ...(DB.push || {}), publicKey: pub, u: Date.now() }; save();
+  showDialog(`<h2>Clés de notification créées</h2>
+    <p class="muted">Copiez ces deux clés dans les secrets du repo privé (voir la procédure). La clé privée n\u2019est affichée qu\u2019une fois et n\u2019est enregistrée nulle part dans l\u2019app.</p>
+    ${field('VAPID_PUBLIC_KEY', `<textarea readonly rows="3" id="k_pub">${pub}</textarea>`)}
+    <div class="btns"><button class="btn sm" data-act="copy" data-src="k_pub">Copier la clé publique</button></div>
+    ${field('VAPID_PRIVATE_KEY', `<textarea readonly rows="2" id="k_priv">${priv}</textarea>`)}
+    <div class="btns"><button class="btn sm" data-act="copy" data-src="k_priv">Copier la clé privée</button></div>
+    <div class="btns end"><button class="btn pri" data-act="close">J\u2019ai copié les deux clés</button></div>`);
+}
+async function enablePush() {
+  if (isIOS() && !isStandalone()) return toast('Installez d\u2019abord l\u2019app : Safari › Partager › « Sur l\u2019écran d\u2019accueil », puis ouvrez-la depuis son icône.');
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined') return toast('Ce navigateur ne gère pas les notifications.');
+  if (!DB.push || !DB.push.publicKey) return toast('Les clés de notification ne sont pas encore créées (Réglages › Notifications).');
+  if (!SY.me) return toast('Choisissez d\u2019abord à qui appartient ce téléphone (Réglages › Cet appareil).');
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') return toast('Notifications refusées : autorisez-les dans les réglages du téléphone.');
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && SY.pushKey !== DB.push.publicKey) { await sub.unsubscribe(); sub = null; }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: ub64u(DB.push.publicKey) });
+    SY.deviceId = SY.deviceId || uid(); SY.pushKey = DB.push.publicKey; saveSync();
+    DB.subs = DB.subs || {};
+    DB.subs[SY.deviceId] = { person: SY.me, name: SY.device || DB.persons[SY.me].name, sub: sub.toJSON(), u: Date.now() };
+    save(); render(); toast('Notifications activées sur ce téléphone');
+    reg.showNotification('Congés Duo', { body: 'Les rappels arriveront ici.', icon: 'icon-192.png' });
+  } catch (err) { toast('Activation impossible : ' + (err && err.message ? err.message : 'erreur inconnue')); }
+}
+function inviteCode() {
+  if (!syncOn()) return toast('Configurez d\u2019abord la sauvegarde GitHub sur ce téléphone.');
+  const other = SY.me === 'a' ? 'b' : SY.me === 'b' ? 'a' : null;
+  if (!other) return toast('Choisissez d\u2019abord à qui appartient ce téléphone.');
+  const code = 'CD1.' + b64u(new TextEncoder().encode(JSON.stringify({ o: SY.owner, r: SY.repo, p: SY.path, t: SY.token, me: other, dev: 'Téléphone ' + DB.persons[other].name })));
+  showDialog(`<h2>Invitation pour ${nm(other)}</h2>
+    <p class="muted">Envoyez ce code à ${nm(other)} par un canal privé, puis supprimez le message : il contient la clé d\u2019accès à vos données.</p>
+    <textarea readonly rows="5" id="inv">${code}</textarea>
+    <div class="btns"><button class="btn sm pri" data-act="copy" data-src="inv">Copier le code</button>
+    ${navigator.share ? '<button class="btn sm" data-act="shareInv">Partager…</button>' : ''}</div>
+    <p class="muted">Sur son téléphone : installer l\u2019app sur l\u2019écran d\u2019accueil, l\u2019ouvrir, coller le code dans « Rejoindre » puis activer les notifications.</p>
+    <div class="btns end"><button class="btn" data-act="close">Fermer</button></div>`);
+}
+function joinWithCode() {
+  const raw = ($('joinCode') || {}).value || '';
+  try {
+    const m = raw.trim().match(/CD1\.([A-Za-z0-9_-]+)/); if (!m) throw new Error();
+    const j = JSON.parse(new TextDecoder().decode(ub64u(m[1])));
+    Object.assign(SY, { owner: j.o, repo: j.r, path: j.p, token: j.t, me: j.me, device: j.dev, error: '', force: false, dirty: false }); saveSync();
+    DB = defaultData(); saveLocal(); render(); toast('Connexion…'); syncNow(true);
+  } catch (e) { toast('Code non reconnu : copiez-le en entier.'); }
+}
+function homeSetup() {
+  if (isIOS() && !isStandalone()) return '';
+  let h = '';
+  if (!syncOn() && !DB.entries.length) h += `<section class="card hint-ios"><b>Rejoindre avec un code d\u2019invitation</b><br><span class="muted">Collez le code reçu, l\u2019app récupère toutes vos données.</span>
+    <textarea id="joinCode" rows="3" placeholder="CD1.…" style="margin-top:8px"></textarea><div class="btns"><button class="btn pri" data-act="join">Rejoindre</button></div></section>`;
+  if (DB.push && DB.push.publicKey && SY.me && !pushOk()) h += `<section class="card hint-ios"><b>🔔 Notifications</b><br>Activez-les pour recevoir les rappels de rendez-vous sur ce téléphone.
+    <div class="btns"><button class="btn pri" data-act="pushOn">Activer les notifications</button></div></section>`;
+  return h;
+}
+
 /* ----- Fenêtre de saisie ----- */
 function dayStateText(p, s) {
   const k = baseKind(p, s);
@@ -851,8 +1017,9 @@ function openDay(s) {
   showDialog(`<h2>${frDate(s)}</h2>${hol ? `<p class="holname">${esc(hol)}</p>` : ''}
     <p class="muted">${P.map(p => `${nm(p)} : ${dayStateText(p, s)}`).join('<br>')}</p>
     ${list ? `<div class="existing">${list}</div>` : ''}
+    ${(DB.appts || []).filter(x => x.date === s).map(x => `<div class="entry"><div class="grow">📌 <b>${esc(x.title)}</b>${x.time ? ` à ${x.time}` : ''}</div><button class="iconbtn" data-act="editAppt" data-id="${x.id}" aria-label="Modifier">✎</button></div>`).join('')}
     ${P.filter(p => DB.persons[p].sched.enabled && isWorkday(p, s)).map(p => `<button class="btn sm ${pc(p)}" data-act="hours" data-p="${p}" data-d="${s}">⏱ Horaires de ${nm(p)}</button>`).join(' ')}
-    <h3>Nouvelle saisie</h3>${entryForm({ date: s, person: 'both', type: 'conge', part: 'full' }, false)}
+    <h3>Nouvelle saisie</h3>${entryForm({ date: s, person: SY.me || 'both', type: 'conge', part: 'full' }, false)}
     <div class="btns end"><button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveAdd">Enregistrer</button></div>`);
 }
 function openEdit(id) {
@@ -932,7 +1099,7 @@ function importFile(file) {
 
 /* ----- Synchronisation avec un repo GitHub privé ----- */
 const SYNC_KEY = 'congesDuo.sync';
-let SY = { owner: '', repo: 'conges-duo-data', path: 'donnees.json', token: '', device: '', lastSync: '', dirty: false, force: false, error: '' };
+let SY = { owner: '', repo: 'conges-duo-data', path: 'donnees.json', token: '', device: '', lastSync: '', dirty: false, force: false, error: '', me: '', deviceId: '', pushKey: '' };
 let syncTimer = null, syncBusy = false, syncAgain = false, syncState = 'off';
 function loadSync() { try { SY = { ...SY, ...JSON.parse(localStorage.getItem(SYNC_KEY) || '{}') }; } catch (e) { /* réglages par défaut */ } }
 function saveSync() { if (typeof localStorage !== 'undefined') localStorage.setItem(SYNC_KEY, JSON.stringify(SY)); }
@@ -955,6 +1122,12 @@ function mergeData(local, remote) {
   const tm = {};
   for (const t of [...R.trips, ...L.trips]) { const cur = tm[t.id]; if (!cur || (+t.u || 0) > (+cur.u || 0)) tm[t.id] = t; }
   out.trips = Object.values(tm).filter(t => !(out.deleted[t.id] >= (+t.u || 0))).sort((a, b) => a.id.localeCompare(b.id));
+  const am = {};
+  for (const t of [...R.appts, ...L.appts]) { const cur = am[t.id]; if (!cur || (+t.u || 0) > (+cur.u || 0)) am[t.id] = t; }
+  out.appts = Object.values(am).filter(t => !(out.deleted[t.id] >= (+t.u || 0))).sort((a, b) => a.id.localeCompare(b.id));
+  out.subs = { ...R.subs };
+  for (const k in L.subs) if (!out.subs[k] || (+L.subs[k].u || 0) > (+out.subs[k].u || 0)) out.subs[k] = L.subs[k];
+  out.push = (+L.push.u || 0) >= (+R.push.u || 0) ? L.push : R.push;
   return out;
 }
 
@@ -1047,7 +1220,7 @@ function onClick(ev) {
     render();
   }
   else if (a === 'day') openDay(b.dataset.d);
-  else if (a === 'add' && S.view === 'trips') openTrip();
+  else if (a === 'add' && S.view === 'trips') openAppt();
   else if (a === 'add') openDay(S.view === 'cal' && S.year === new Date().getFullYear() && S.calM === new Date().getMonth() + 1 ? todayISO()
     : S.view === 'cal' ? iso(S.year, S.calM, 1) : todayISO());
   else if (a === 'edit') { const e = DB.entries.find(x => x.id === b.dataset.id); if (e && e.times) openHours(e.person, e.date); else if (e && e.type === 'otbal') openReserve(e.person, e.id); else openEdit(b.dataset.id); }
@@ -1086,6 +1259,28 @@ function onClick(ev) {
     }
   }
   else if (a === 'editTrip') openTrip(b.dataset.id);
+  else if (a === 'newTrip') openTrip();
+  else if (a === 'newAppt') openAppt();
+  else if (a === 'editAppt') openAppt(b.dataset.id);
+  else if (a === 'saveAppt') saveAppt(b.dataset.id);
+  else if (a === 'delAppt') {
+    const x = (DB.appts || []).find(y => y.id === b.dataset.id); if (!x) return;
+    if (!confirm(`Supprimer le rendez-vous « ${x.title} » ?`)) return;
+    DB.appts = DB.appts.filter(y => y.id !== x.id); DB.deleted[x.id] = Date.now(); save(); $('dlg').close(); render(); toast('Rendez-vous supprimé');
+  }
+  else if (a === 'addRem') { const box = $('rems'); if (box) box.insertAdjacentHTML('beforeend', remRow({ n: 1, u: 'h' })); }
+  else if (a === 'delRem') { const r = b.closest('.rem'); if (r) r.remove(); }
+  else if (a === 'apptIcs') apptIcs(b.dataset.id);
+  else if (a === 'genKeys') genVapid();
+  else if (a === 'pushOn') enablePush();
+  else if (a === 'delSub') {
+    if (!confirm('Retirer cet appareil des notifications ?')) return;
+    DB.subs[b.dataset.id] = { ...DB.subs[b.dataset.id], sub: null, u: Date.now() }; save(); render();
+  }
+  else if (a === 'invite') inviteCode();
+  else if (a === 'shareInv') { navigator.share({ text: $('inv').value }).catch(() => {}); }
+  else if (a === 'copy') { const el = $(b.dataset.src); if (el) { (navigator.clipboard ? navigator.clipboard.writeText(el.value) : Promise.reject()).then(() => toast('Copié'), () => { el.select(); document.execCommand('copy'); toast('Copié'); }); } }
+  else if (a === 'join') joinWithCode();
   else if (a === 'saveTrip') saveTrip(b.dataset.id);
   else if (a === 'delTrip') {
     const t = DB.trips.find(x => x.id === b.dataset.id); if (!t) return;
@@ -1150,6 +1345,10 @@ function onChange(ev) {
   } else if (t.dataset.sync) {
     SY[t.dataset.sync] = t.value.trim(); SY.error = ''; saveSync(); setSyncState();
     if (syncOn() && (t.dataset.sync === 'token' || t.dataset.sync === 'repo' || t.dataset.sync === 'owner')) syncNow(true);
+  } else if (t.name === 'me' && t.closest('.sect')) {
+    SY.me = t.value; saveSync();
+    if (SY.deviceId && DB.subs && DB.subs[SY.deviceId] && DB.subs[SY.deviceId].sub) { DB.subs[SY.deviceId].person = SY.me; DB.subs[SY.deviceId].u = Date.now(); save(); }
+    render(); toast(`Ce téléphone est celui de ${DB.persons[SY.me].name}`);
   } else if (t.id === 'importFile') {
     if (t.files[0]) importFile(t.files[0]); t.value = '';
   } else if (t.name === 'f_type') syncForm();
@@ -1176,7 +1375,7 @@ function init() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
+  module.exports = { remText, recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
     getDB: () => DB, setDB: d => { DB = migrate(d); } };
 }
 if (typeof document !== 'undefined') init();

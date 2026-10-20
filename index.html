@@ -172,7 +172,10 @@ input:not([type=checkbox]):not([type=radio]),select,textarea{width:100%;min-widt
 .item{display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--line);font-size:14px;align-items:flex-start}
 .item .ico{font-size:20px;line-height:1.2}
 .item .grow{flex:1;min-width:0;overflow-wrap:anywhere}
-.day .tripm{position:absolute;top:3px;left:22px;font-size:10px;line-height:1;color:var(--a)}
+.day .mk{font-size:9px;font-weight:400;margin-left:2px;letter-spacing:-1px}
+.warn{color:var(--hol);font-size:13px;margin-top:4px}
+h3.sec{margin:18px 2px 8px;font-size:15px}
+textarea[readonly]{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
 .hint-ios{border-color:var(--a);font-size:14px}
 .dst{border-color:var(--star);font-size:14px}
 /* Fenêtre */
@@ -214,7 +217,7 @@ nav.tabs button.on{color:var(--a);font-weight:600}
   <button data-act="tab" data-v="cal"><span class="ic">▦</span>Calendrier</button>
   <button data-act="tab" data-v="ponts"><span class="ic">⌒</span>Ponts</button>
   <button data-act="tab" data-v="list"><span class="ic">☰</span>Saisies</button>
-  <button data-act="tab" data-v="trips"><span class="ic">✈</span>Voyages</button>
+  <button data-act="tab" data-v="trips"><span class="ic">📅</span>Agenda</button>
   <button data-act="tab" data-v="set"><span class="ic">⚙</span>Réglages</button>
 </nav>
 <dialog id="dlg"><div class="dlg" id="dlgBody"></div></dialog>
