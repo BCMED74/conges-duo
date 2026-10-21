@@ -4,7 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'congesDuo.v1';
-const APP_VERSION = '2026-10-20 n°7';
+const APP_VERSION = '2026-10-21 n°8';
 const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
@@ -722,12 +722,13 @@ async function getFile(tid, id) {
 
 /* ----- Horaires du jour ----- */
 function openHours(p, s) {
-  const pl = planned(p, s); if (!pl) return toast('Pas d\u2019horaire le dimanche.');
+  const pl = planned(p, s); if (!pl) return toast('Pas d\u2019horaire le dimanche : choisissez un autre jour.');
   const ex = DB.entries.find(e => e.person === p && e.date === s && e.type === 'otdone' && e.times);
   const t = ex ? ex.times : (pl.sat ? { in: pl.start, out: pl.end, pause: pl.pause } : { in: pl.start, l1: pl.l1, l2: pl.l2, out: pl.end });
   const inp = (k, lab) => field(lab, `<input type="time" name="h_${k}" value="${t[k] || ''}" data-hours="1">`);
   showDialog(`<h2>Horaires : ${nm(p)}</h2>
-    <p class="muted">${frDate(s)}<br>${SEASON[pl.season]} prévu : ${pl.sat ? `${pl.start}–${pl.end}, pause ${pl.pause} min` : `${pl.start}–${pl.l1} et ${pl.l2}–${pl.end}`}</p>
+    ${field('Jour', `<input type="date" name="h_date" value="${s}" data-hdate="${p}">`)}
+    <p class="muted">${SEASON[pl.season]} prévu : ${pl.sat ? `${pl.start}–${pl.end}, pause ${pl.pause} min` : `${pl.start}–${pl.l1} et ${pl.l2}–${pl.end}`}</p>
     ${pl.sat ? `<div class="two">${inp('in', 'Arrivée')}${inp('out', 'Départ')}</div>${field('Pause prise (minutes)', `<input type="number" inputmode="numeric" name="h_pause" value="${t.pause}" data-hours="1">`)}`
       : `<div class="two">${inp('in', 'Arrivée')}${inp('l1', 'Départ à midi')}</div><div class="two">${inp('l2', 'Reprise')}${inp('out', 'Départ le soir')}</div>`}
     <p class="calc" id="h_res"></p>
@@ -752,7 +753,7 @@ function saveHours(p, s) {
   if (!diff && !ex) { $('dlg').close(); return toast('Horaire normal : rien à compter.'); }
   if (!ex) { ex = { id: uid(), person: p, date: s, type: 'otdone', part: 'full', note: 'Horaires' }; DB.entries.push(ex); }
   Object.assign(ex, { hours: Math.round(diff / 60 * 100) / 100, times, status: 'pris', u: Date.now() });
-  if (!DB.persons[p].ot.enabled) { DB.persons[p].ot.enabled = true; DB.su = Date.now(); }
+  if (!DB.persons[p].ot.enabled || !DB.persons[p].sched.enabled) { DB.persons[p].ot.enabled = true; DB.persons[p].sched.enabled = true; DB.su = Date.now(); }
   save(); $('dlg').close(); render(); toast(diff ? `${hm(diff)} enregistré` : 'Horaire normal enregistré');
 }
 function dstIcs() {
@@ -975,6 +976,16 @@ function joinWithCode() {
     Object.assign(SY, { owner: j.o, repo: j.r, path: j.p, token: j.t, me: j.me, device: j.dev, error: '', force: false, dirty: false }); saveSync();
     DB = defaultData(); saveLocal(); render(); toast('Connexion…'); syncNow(true);
   } catch (e) { toast('Code non reconnu : copiez-le en entier.'); }
+}
+function openAdd() {
+  const td = todayISO();
+  const ps = SY.me ? [SY.me] : P;
+  showDialog(`<h2>Ajouter</h2>
+    ${ps.map(p => `<button class="btn wide pri" style="text-align:left" data-act="hours" data-p="${p}" data-d="${td}">⏱ ${SY.me ? 'Mes horaires' : 'Horaires de ' + nm(p)}<br><small>heure d\u2019arrivée, de départ, pause de midi</small></button>`).join('')}
+    <button class="btn wide" style="text-align:left" data-act="addLeave">🏖 Congé, absence ou travail en plus</button>
+    <button class="btn wide" style="text-align:left" data-act="newAppt">📌 Rendez-vous</button>
+    <button class="btn wide" style="text-align:left" data-act="newTrip">✈ Voyage</button>
+    <div class="btns end"><button class="btn" data-act="close">Annuler</button></div>`);
 }
 function showNotif(t, b) {
   showDialog(`<h2>${esc(t || 'Congés Duo')}</h2><p style="font-size:16px">${esc(b || '')}</p>
@@ -1255,8 +1266,8 @@ function onClick(ev) {
     render();
   }
   else if (a === 'day') openDay(b.dataset.d);
-  else if (a === 'add' && S.view === 'trips') openAppt();
-  else if (a === 'add') openDay(S.view === 'cal' && S.year === new Date().getFullYear() && S.calM === new Date().getMonth() + 1 ? todayISO()
+  else if (a === 'add') openAdd();
+  else if (a === 'addLeave') openDay(S.view === 'cal' && S.year === new Date().getFullYear() && S.calM === new Date().getMonth() + 1 ? todayISO()
     : S.view === 'cal' ? iso(S.year, S.calM, 1) : todayISO());
   else if (a === 'edit') { const e = DB.entries.find(x => x.id === b.dataset.id); if (e && e.times) openHours(e.person, e.date); else if (e && e.type === 'otbal') openReserve(e.person, e.id); else openEdit(b.dataset.id); }
   else if (a === 'hours') openHours(b.dataset.p, b.dataset.d);
@@ -1389,6 +1400,7 @@ function onChange(ev) {
     render(); toast(`Ce téléphone est celui de ${DB.persons[SY.me].name}`);
   } else if (t.id === 'importFile') {
     if (t.files[0]) importFile(t.files[0]); t.value = '';
+  } else if (t.dataset.hdate) { if (t.value) openHours(t.dataset.hdate, t.value);
   } else if (t.name === 'f_type') syncForm();
 }
 function init() {
