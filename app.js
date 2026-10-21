@@ -4,7 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'congesDuo.v1';
-const APP_VERSION = '2026-10-21 n°8';
+const APP_VERSION = '2026-10-21 n°9';
 const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
@@ -89,10 +89,11 @@ function deepMerge(base, over) {
 }
 function migrate(d) {
   const def = defaultData();
-  const out = { version: 1, su: +d.su || 0, persons: {}, entries: Array.isArray(d.entries) ? d.entries : [], trips: Array.isArray(d.trips) ? d.trips : [], appts: Array.isArray(d.appts) ? d.appts : [],
+  const out = { version: 1, su: +d.su || 0, sup: d.sup && typeof d.sup === 'object' ? d.sup : {}, persons: {}, entries: Array.isArray(d.entries) ? d.entries : [], trips: Array.isArray(d.trips) ? d.trips : [], appts: Array.isArray(d.appts) ? d.appts : [],
     subs: d.subs && typeof d.subs === 'object' ? d.subs : {}, push: d.push && typeof d.push === 'object' ? d.push : {},
     deleted: d.deleted && typeof d.deleted === 'object' && !Array.isArray(d.deleted) ? d.deleted : {} };
   for (const p of P) out.persons[p] = deepMerge(def.persons[p], (d.persons && d.persons[p]) || {});
+  for (const p of P) if (!out.sup[p]) out.sup[p] = out.su;
   return out;
 }
 let DB = defaultData();
@@ -106,6 +107,8 @@ function save() {
   if (typeof localStorage === 'undefined') return;
   SY.dirty = true; saveSync(); setSyncState(); scheduleSync();
 }
+// Horodatage des réglages, personne par personne (évite qu'une modification en écrase une autre).
+function touch(p) { DB.sup = DB.sup || {}; DB.sup[p] = Date.now(); DB.su = Date.now(); }
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const val = e => (e.part === 'full' ? 1 : 0.5);
 
@@ -524,10 +527,11 @@ function droitCalcText(p) {
   const y = S.year, d = droitInfo(p, y);
   return `Droit ${y} calculé : <b>${n(d.value)} j</b>${d.text ? ` (${d.text})` : ''}`;
 }
+const isAdmin = () => SY.me !== 'b';
 function renderSet() {
-  const y = S.year;
+  const y = S.year, admin = isAdmin();
   let h = `<p class="muted">Réglages de l\u2019année <b>${y}</b> : change l\u2019année en haut pour régler une autre année.</p>`;
-  for (const p of P) {
+  for (const p of (admin ? P : [SY.me])) {
     const per = DB.persons[p], pr = per.bloc.periods[y] || {};
     const body = `
       ${field('Nom affiché', `<input data-set="${p}.name" value="${esc(per.name)}">`)}
@@ -556,21 +560,23 @@ function renderSet() {
     h += sect('p-' + p, `<span class="dot"></span><span class="grow">${nm(p)}</span>`, body, pc(p));
   }
   h += sect('device', '<span class="grow">Cet appareil</span>', `
-    <div class="field"><span class="lbl">Ce téléphone est celui de</span>${radios('me', [['a', nm('a')], ['b', nm('b')]], SY.me)}</div>
+    ${admin ? `<div class="field"><span class="lbl">Ce téléphone est celui de</span>${radios('me', [['a', nm('a')], ['b', nm('b')]], SY.me)}</div>` : `<p>Ce téléphone est celui de <b>${nm(SY.me)}</b>.</p>`}
     <p class="muted">Sa carte s\u2019affiche en premier et les rappels qui le concernent arrivent ici. Ce réglage reste sur ce téléphone.</p>
     <p class="muted">Version de l\u2019app : ${APP_VERSION}, <span id="swver">…</span></p>
-    <div class="btns"><button class="btn sm" data-act="invite">Inviter ${SY.me ? nm(SY.me === 'a' ? 'b' : 'a') : 'l\u2019autre personne'} sur son téléphone</button></div>`);
+    ${admin ? `<div class="btns"><button class="btn sm" data-act="invite">Inviter ${SY.me ? nm(SY.me === 'a' ? 'b' : 'a') : 'l\u2019autre personne'} sur son téléphone</button></div>` : ''}`);
   const subs = Object.entries(DB.subs || {}).filter(([, v]) => v && v.sub);
   h += sect('notif', '<span class="grow">Notifications</span>', `
     <p class="muted">Les rappels de rendez-vous et de changement d\u2019horaire sont envoyés par une tâche automatique de votre repo privé, toutes les 30 minutes.</p>
     <div class="row"><span>Clés de notification</span><b>${DB.push && DB.push.publicKey ? 'créées' : 'à créer'}</b></div>
     <div class="row"><span>Ce téléphone</span><b>${pushOk() ? 'activé' : 'non activé'}</b></div>
-    ${subs.map(([k, v]) => `<div class="row"><span>${esc(v.name || '')} (${esc((DB.persons[v.person] || {}).name || '')})</span><b><button class="btn sm danger" data-act="delSub" data-id="${k}">Retirer</button></b></div>`).join('')}
+    ${admin ? subs.map(([k, v]) => `<div class="row"><span>${esc(v.name || '')} (${esc((DB.persons[v.person] || {}).name || '')})</span><b><button class="btn sm danger" data-act="delSub" data-id="${k}">Retirer</button></b></div>`).join('') : ''}
     <div class="btns"><button class="btn sm pri" data-act="pushOn">Activer sur ce téléphone</button>
-    <button class="btn sm" data-act="genKeys">${DB.push && DB.push.publicKey ? 'Recréer les clés' : 'Créer les clés'}</button></div>`);
+    ${admin ? `<button class="btn sm" data-act="genKeys">${DB.push && DB.push.publicKey ? 'Recréer les clés' : 'Créer les clés'}</button>` : ''}</div>`);
   h += dstSettings();
   const hist = SY.owner && SY.repo ? `https://github.com/${encodeURIComponent(SY.owner)}/${encodeURIComponent(SY.repo)}/commits/main/${SY.path.split('/').map(encodeURIComponent).join('/')}` : '';
-  h += sect('sync', '<span class="grow">Sauvegarde privée sur GitHub</span>', `
+  if (!admin) h += sect('sync', '<span class="grow">Sauvegarde</span>', `<p class="syncline" id="syncStatus">${syncText()}</p>
+    <div class="btns"><button class="btn pri" data-act="sync">Synchroniser maintenant</button></div>`);
+  else h += sect('sync', '<span class="grow">Sauvegarde privée sur GitHub</span>', `
     <p class="muted">Après chaque modification, les données sont envoyées dans votre repo privé. Chaque envoi devient une version dans l\u2019historique du repo. La clé reste sur ce téléphone et n\u2019est jamais exportée.</p>
     <div class="two">${field('Compte GitHub', `<input data-sync="owner" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="nom du compte" value="${esc(SY.owner)}">`)}
     ${field('Repo privé', `<input data-sync="repo" autocapitalize="off" autocorrect="off" spellcheck="false" value="${esc(SY.repo)}">`)}</div>
@@ -584,7 +590,7 @@ function renderSet() {
   h += sect('file', '<span class="grow">Fichier de sauvegarde</span>', `
     <p class="muted">Copie manuelle, en plus de GitHub : pour archiver un état précis ou repartir d\u2019un fichier. L\u2019import remplace tout, ici et sur GitHub.</p>
     <div class="btns"><button class="btn pri" data-act="export">Exporter la sauvegarde (JSON)</button>
-    <button class="btn" data-act="import">Importer une sauvegarde</button>
+    ${admin ? '<button class="btn" data-act="import">Importer une sauvegarde</button>' : ''}
     <button class="btn" data-act="csv">Exporter en CSV</button></div>
     <p class="muted">Effacer ne touche qu\u2019à ce téléphone : la sauvegarde GitHub reste intacte, et remettre la clé récupère tout.</p>
     <div class="btns"><button class="btn danger" data-act="reset">Effacer les données de ce téléphone</button></div>`);
@@ -614,7 +620,7 @@ function tripCard(t) {
     h += `<div class="item"><span class="ico">${ico}</span><div class="grow"><b>${esc(it.title || lab)}</b>
       ${when ? `<br><small>${when}</small>` : ''}${it.ref ? `<br><small>Réf. <b>${esc(it.ref)}</b></small>` : ''}${it.price ? ` <small class="muted">· ${esc(it.price)}</small>` : ''}
       ${it.notes ? `<br><small class="muted">${esc(it.notes)}</small>` : ''}
-      <div class="btns" style="margin:6px 0 0">${it.link ? `<a class="btn sm" href="${esc(it.link)}" target="_blank" rel="noopener">Ouvrir le lien</a>` : ''}
+      <div class="btns" style="margin:6px 0 0">${safeUrl(it.link) ? `<a class="btn sm" href="${esc(safeUrl(it.link))}" target="_blank" rel="noopener noreferrer">Ouvrir le lien</a>` : ''}
       ${it.file ? `<button class="btn sm" data-act="getFile" data-t="${t.id}" data-id="${it.id}">📄 ${esc(it.file.name)}</button>` : ''}</div>
       <div id="dl-${it.id}"></div></div>
       <button class="iconbtn" data-act="editItem" data-t="${t.id}" data-id="${it.id}" aria-label="Modifier">✎</button></div>`;
@@ -671,6 +677,7 @@ function openItem(tid, id) {
     <div class="btns end">${id ? `<button class="btn danger" data-act="delItem" data-t="${tid}" data-id="${id}">Supprimer</button>` : ''}
     <button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveItem" data-t="${tid}" data-id="${id || ''}">Enregistrer</button></div>`);
 }
+const safeUrl = u => (/^https?:\/\/[^\s"'<>]+$/i.test(String(u || '').trim()) ? String(u).trim() : '');
 const safeName = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w.-]+/g, '_').slice(-80);
 const readB64 = f => new Promise((ok, ko) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = ko; r.readAsDataURL(f); });
 const fileApi = path => `${repoUrl()}/contents/${path.split('/').map(encodeURIComponent).join('/')}`;
@@ -684,6 +691,7 @@ async function saveItem(tid, id) {
   const t = DB.trips.find(x => x.id === tid); if (!t) return;
   const q = k => document.querySelector(`[name=${k}]`);
   const file = q('i_file').files[0];
+  if (q('i_link').value.trim() && !safeUrl(q('i_link').value)) return toast('Le lien doit commencer par https://');
   if (file && !syncOn()) return toast('Configurez d\u2019abord la sauvegarde GitHub pour joindre un fichier.');
   if (file && file.size > 20e6) return toast('Fichier trop lourd (20 Mo maximum).');
   t.items = t.items || [];
@@ -753,7 +761,7 @@ function saveHours(p, s) {
   if (!diff && !ex) { $('dlg').close(); return toast('Horaire normal : rien à compter.'); }
   if (!ex) { ex = { id: uid(), person: p, date: s, type: 'otdone', part: 'full', note: 'Horaires' }; DB.entries.push(ex); }
   Object.assign(ex, { hours: Math.round(diff / 60 * 100) / 100, times, status: 'pris', u: Date.now() });
-  if (!DB.persons[p].ot.enabled || !DB.persons[p].sched.enabled) { DB.persons[p].ot.enabled = true; DB.persons[p].sched.enabled = true; DB.su = Date.now(); }
+  if (!DB.persons[p].ot.enabled || !DB.persons[p].sched.enabled) { DB.persons[p].ot.enabled = true; DB.persons[p].sched.enabled = true; touch(p); }
   save(); $('dlg').close(); render(); toast(diff ? `${hm(diff)} enregistré` : 'Horaire normal enregistré');
 }
 function dstIcs() {
@@ -796,7 +804,7 @@ function saveReserve(p, id) {
   let e = DB.entries.find(x => x.id === id) || DB.entries.find(x => x.person === p && x.type === 'otbal' && x.date === d);
   if (!e) { e = { id: uid(), person: p, type: 'otbal', part: 'full', status: 'pris' }; DB.entries.push(e); }
   Object.assign(e, { date: d, hours: hrs, u: Date.now() });
-  if (!DB.persons[p].ot.enabled) { DB.persons[p].ot.enabled = true; DB.su = Date.now(); }
+  if (!DB.persons[p].ot.enabled) { DB.persons[p].ot.enabled = true; touch(p); }
   save(); $('dlg').close(); render(); toast(`Réserve notée : ${n(hrs)} h`);
 }
 function recapData(p, y) {
@@ -1028,6 +1036,64 @@ function homeSetup() {
   return h;
 }
 
+/* ----- Périodes (plusieurs jours de la même demande) ----- */
+function periodOf(e) {
+  if (!e || !['conge', 'otrecup', 'extra'].includes(e.type)) return [e];
+  const same = x => x.person === e.person && x.type === e.type && (x.note || '') === (e.note || '') && x.status === e.status;
+  const byDate = {};
+  DB.entries.forEach(x => { if (same(x)) byDate[x.date] = x; });
+  const out = [e];
+  for (const dir of [-1, 1]) {
+    let d = e.date, gap = 0;
+    while (gap < 10) {
+      d = addDays(d, dir);
+      if (byDate[d]) { out.push(byDate[d]); gap = 0; }
+      else if (!isWorkday(e.person, d)) gap++;
+      else break;
+    }
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+function openPeriod(id) {
+  const e = DB.entries.find(x => x.id === id); if (!e) return;
+  const per = periodOf(e), first = per[0].date, last = per[per.length - 1].date;
+  const days = per.reduce((t, x) => t + val(x), 0);
+  const tOpts = (e.type === 'extra' ? [['extra', TYPE_FORM.extra]] : [['conge', TYPE_FORM.conge], ['otrecup', TYPE_FORM.otrecup]])
+    .map(([k, l]) => `<option value="${k}"${k === e.type ? ' selected' : ''}>${l}</option>`).join('');
+  showDialog(`<h2>${esc(e.note || TYPES[e.type])}</h2>
+    <p class="muted">${nm(e.person)} : du ${frDate(first)} au ${frDate(last)}, ${n(days)} jour(s) ${tagHtml(e.status)}</p>
+    ${e.status === 'demande' ? `<div class="btns"><button class="btn pri" data-act="perValidate" data-id="${id}">✓ Valider toute la période</button></div>` : ''}
+    <h3>Modifier la période</h3>
+    <div class="two">${field('Du', `<input type="date" name="pe_start" value="${first}">`)}${field('Au', `<input type="date" name="pe_end" value="${last}">`)}</div>
+    ${field('Type', `<select name="pe_type">${tOpts}</select>`)}
+    ${field('Statut', `<select name="pe_status">${['demande', 'prevu', 'pris'].map(k => `<option value="${k}"${k === e.status ? ' selected' : ''}>${{ demande: 'À valider (demandé au chef)', prevu: 'Validé (à venir)', pris: 'Pris' }[k]}</option>`).join('')}</select>`)}
+    ${field('Nom de la demande', `<input name="pe_note" value="${esc(e.note || '')}">`)}
+    <p class="muted hint">Seuls les jours de travail sont décomptés. Les demi-journées de la période sont conservées.</p>
+    <div class="btns end"><button class="btn danger" data-act="perDelete" data-id="${id}">Supprimer la période</button>
+    <button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="perSave" data-id="${id}">Enregistrer</button></div>`);
+}
+function periodRemove(per) {
+  const ids = new Set(per.map(x => x.id)), now = Date.now();
+  DB.entries = DB.entries.filter(x => !ids.has(x.id)); ids.forEach(i => { DB.deleted[i] = now; });
+}
+function periodSave(id) {
+  const e = DB.entries.find(x => x.id === id); if (!e) return;
+  const q = k => document.querySelector(`[name=${k}]`);
+  const start = q('pe_start').value, end = q('pe_end').value || start, type = q('pe_type').value, status = q('pe_status').value, note = q('pe_note').value.trim();
+  if (!start || end < start) return toast('Vérifiez les dates.');
+  const per = periodOf(e), parts = {}; per.forEach(x => { parts[x.date] = x.part; });
+  const old = per.slice(); periodRemove(per);
+  const created = [], skipped = [];
+  for (let s = start; s <= end; s = addDays(s, 1)) {
+    const part = parts[s] || 'full', r = blockReason(e.person, s, type, part, null);
+    if (r) { if (r.startsWith('déjà') || r.startsWith('heures')) skipped.push(`${short(s)} (${r})`); continue; }
+    created.push({ id: uid(), person: e.person, date: s, type, part, status, u: Date.now(), ...(note ? { note } : {}) });
+  }
+  if (!created.length) { DB.entries.push(...old); old.forEach(x => { delete DB.deleted[x.id]; }); return toast('Aucun jour de travail dans ces dates : rien n\u2019a été changé.'); }
+  DB.entries.push(...created); save(); $('dlg').close(); render();
+  toast(`${n(created.reduce((t, x) => t + val(x), 0))} jour(s) enregistrés` + (skipped.length ? `, ignorés : ${skipped.join(', ')}` : ''));
+}
+
 /* ----- Fenêtre de saisie ----- */
 function dayStateText(p, s) {
   const k = baseKind(p, s);
@@ -1058,8 +1124,9 @@ function entryForm(e, isEdit) {
 }
 function openDay(s) {
   const idx = buildIdx(), hol = holidayName(s);
-  const list = (idx[s] || []).map(e => `<div class="entry ${pc(e.person)}"><span class="dot"></span><div class="grow">${nm(e.person)} : ${TYPES[e.type]}, ${e.type === 'otbal' ? n(e.hours || 0) + ' h' : e.type === 'otdone' ? n(e.hours || 0) + ' h' + (e.times ? ` (${timesText(e.times)})` : '') : PARTS[e.part]} ${tagHtml(e.status)}${e.note ? ` <small class="muted">${esc(e.note)}</small>` : ''}</div>
-    <button class="iconbtn" data-act="edit" data-id="${e.id}" aria-label="Modifier">✎</button><button class="iconbtn" data-act="del" data-id="${e.id}" aria-label="Supprimer">✕</button></div>`).join('');
+  const list = (idx[s] || []).map(e => { const per = periodOf(e), multi = per.length > 1; return `<div class="entry ${pc(e.person)}"><span class="dot"></span><div class="grow">${nm(e.person)} : ${TYPES[e.type]}, ${e.type === 'otbal' ? n(e.hours || 0) + ' h' : e.type === 'otdone' ? n(e.hours || 0) + ' h' + (e.times ? ` (${timesText(e.times)})` : '') : PARTS[e.part]} ${tagHtml(e.status)}${e.note ? ` <small class="muted">${esc(e.note)}</small>` : ''}
+    ${multi ? `<br><small class="muted">Période du ${short(per[0].date)} au ${short(per[per.length - 1].date)} (${per.length} j)</small><div class="btns" style="margin:6px 0 0">${e.status === 'demande' ? `<button class="btn sm pri" data-act="perValidate" data-id="${e.id}">✓ Valider la période</button>` : ''}<button class="btn sm" data-act="period" data-id="${e.id}">Modifier la période</button></div>` : ''}</div>
+    <button class="iconbtn" data-act="edit" data-id="${e.id}" aria-label="Modifier">✎</button><button class="iconbtn" data-act="del" data-id="${e.id}" aria-label="Supprimer">✕</button></div>`; }).join('');
   showDialog(`<h2>${frDate(s)}</h2>${hol ? `<p class="holname">${esc(hol)}</p>` : ''}
     <p class="muted">${P.map(p => `${nm(p)} : ${dayStateText(p, s)}`).join('<br>')}</p>
     ${list ? `<div class="existing">${list}</div>` : ''}
@@ -1136,7 +1203,7 @@ function importFile(file) {
       const obj = JSON.parse(rd.result);
       if (!obj || !obj.persons || !Array.isArray(obj.entries)) throw new Error('format');
       if (!confirm(`Importer ce fichier (${obj.entries.length} saisies) ? Les données actuelles seront remplacées, ici et sur GitHub si la synchro est active.`)) return;
-      DB = migrate(obj); DB.su = Date.now(); SY.force = true; save(); render(); toast('Sauvegarde importée');
+      DB = migrate(obj); DB.su = Date.now(); DB.sup = { a: Date.now(), b: Date.now() }; SY.force = true; save(); render(); toast('Sauvegarde importée');
     } catch (err) { toast('Fichier non reconnu : choisissez une sauvegarde Congés Duo (.json).'); }
   };
   rd.readAsText(file);
@@ -1159,7 +1226,9 @@ function scheduleSync(delay = 2500) {
    les suppressions sont gardées en mémoire pour ne pas réapparaître. */
 function mergeData(local, remote) {
   const L = migrate(local), R = migrate(remote);
-  const out = { version: 1, su: Math.max(L.su, R.su), persons: R.su > L.su ? R.persons : L.persons, entries: [], trips: [], deleted: {} };
+  const ts = (D, p) => +(D.sup[p] || 0);
+  const out = { version: 1, su: Math.max(L.su, R.su), sup: {}, persons: {}, entries: [], trips: [], deleted: {} };
+  for (const p of P) { const r = ts(R, p) > ts(L, p); out.persons[p] = r ? R.persons[p] : L.persons[p]; out.sup[p] = Math.max(ts(L, p), ts(R, p)); }
   for (const src of [L.deleted, R.deleted]) for (const id in src) out.deleted[id] = Math.max(out.deleted[id] || 0, +src[id] || 0);
   const map = {};
   for (const e of [...R.entries, ...L.entries]) { const cur = map[e.id]; if (!cur || (+e.u || 0) > (+cur.u || 0)) map[e.id] = e; }
@@ -1329,6 +1398,20 @@ function onClick(ev) {
   else if (a === 'pasteJoin') { (navigator.clipboard && navigator.clipboard.readText ? navigator.clipboard.readText() : Promise.reject()).then(t => { $('joinCode').value = t; joinWithCode(); }, () => toast('Collez le code à la main dans le champ (appui long › Coller).')); }
   else if (a === 'copy') { const el = $(b.dataset.src); if (el) { (navigator.clipboard ? navigator.clipboard.writeText(el.value) : Promise.reject()).then(() => toast('Copié'), () => { el.select(); document.execCommand('copy'); toast('Copié'); }); } }
   else if (a === 'join') joinWithCode();
+  else if (a === 'period') openPeriod(b.dataset.id);
+  else if (a === 'perSave') periodSave(b.dataset.id);
+  else if (a === 'perValidate') {
+    const e = DB.entries.find(x => x.id === b.dataset.id); if (!e) return;
+    const per = periodOf(e).filter(x => x.status === 'demande'), t = todayISO();
+    per.forEach(x => { x.status = x.date <= t ? 'pris' : 'prevu'; x.u = Date.now(); });
+    save(); if ($('dlg').open) $('dlg').close(); render(); toast(`${n(per.reduce((s2, x) => s2 + val(x), 0))} jour(s) validé(s)`);
+  }
+  else if (a === 'perDelete') {
+    const e = DB.entries.find(x => x.id === b.dataset.id); if (!e) return;
+    const per = periodOf(e);
+    if (!confirm(`Supprimer toute la période (${per.length} jour(s)) de ${DB.persons[e.person].name} ?`)) return;
+    periodRemove(per); save(); $('dlg').close(); render(); toast('Période supprimée');
+  }
   else if (a === 'notifSeen') { S.lastNotif = null; if (typeof caches !== 'undefined') caches.open('cd-notifs').then(c => c.delete('./__derniere-notification')).catch(() => {}); render(); }
   else if (a === 'saveTrip') saveTrip(b.dataset.id);
   else if (a === 'delTrip') {
@@ -1384,13 +1467,13 @@ function onChange(ev) {
     else v = t.value;
     setPath(t.dataset.set, v);
     if (t.dataset.set.endsWith('.sched.enabled') && v) DB.persons[t.dataset.set.split('.')[0]].ot.enabled = true;
-    DB.su = Date.now(); save();
+    touch(t.dataset.set.split('.')[0]); save();
     if (t.type === 'checkbox' || t.dataset.set.endsWith('.name')) render();
     else P.forEach(p => { const el = $('calc-' + p); if (el) el.innerHTML = droitCalcText(p); });
   } else if (t.dataset.rest) {
     const p = t.dataset.rest;
     DB.persons[p].rest = [...document.querySelectorAll(`[data-rest="${p}"]:checked`)].map(x => +x.value);
-    DB.su = Date.now(); save();
+    touch(p); save();
   } else if (t.dataset.sync) {
     SY[t.dataset.sync] = t.value.trim(); SY.error = ''; saveSync(); setSyncState();
     if (syncOn() && (t.dataset.sync === 'token' || t.dataset.sync === 'repo' || t.dataset.sync === 'owner')) syncNow(true);
@@ -1403,9 +1486,15 @@ function onChange(ev) {
   } else if (t.dataset.hdate) { if (t.value) openHours(t.dataset.hdate, t.value);
   } else if (t.name === 'f_type') syncForm();
 }
+function autoPris() {
+  const t = todayISO(); let k = 0;
+  DB.entries.forEach(e => { if (e.status === 'prevu' && e.date <= t) { e.status = 'pris'; e.u = Date.now(); k++; } });
+  if (k) save();
+}
 function init() {
   load();
   loadSync();
+  autoPris();
   const inv = (location.hash.match(/invite=(CD1\.[A-Za-z0-9_-]+)/) || [])[1];
   if (inv) {
     history.replaceState(null, '', location.pathname + location.search);
@@ -1435,7 +1524,7 @@ function init() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { remText, recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
+  module.exports = { periodOf, safeUrl, remText, recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
     getDB: () => DB, setDB: d => { DB = migrate(d); } };
 }
 if (typeof document !== 'undefined') init();
