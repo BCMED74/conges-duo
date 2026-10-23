@@ -4,7 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'congesDuo.v1';
-const APP_VERSION = '2026-10-23 n°12';
+const APP_VERSION = '2026-10-23 n°13';
 const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
@@ -411,6 +411,8 @@ function ringCard(p, y) {
     </svg><span class="ringval${over ? ' over' : ''}">${over ? '−' + n(over) : n(c.restant)} j</span></span>
     <b>${nm(p)}</b><small>${over ? 'jours en trop en ' + y : `restants sur ${n(c.total)} en ${y}`}</small></button>`;
 }
+// Chacun ne valide que ses propres demandes (c'est son chef à lui qui décide).
+const canValidate = person => !SY.me || person === SY.me;
 function pendingGroups() {
   const g = {};
   DB.entries.filter(e => e.status === 'demande' && ['conge', 'otrecup', 'extra'].includes(e.type)).sort((a, b) => a.date.localeCompare(b.date)).forEach(e => {
@@ -440,7 +442,7 @@ function renderHome() {
   if (pend.length) {
     h += `<section class="card pend"><div class="pendh"><h2>${pend.length} demande${pend.length > 1 ? 's' : ''} à valider</h2><button type="button" class="linkbtn" data-act="tab" data-v="list">Tout voir</button></div>
       ${pend.slice(0, 4).map(g => `<div class="pendrow ${pc(g.person)}"><span class="dot"></span><div class="grow"><b>${esc(g.label)}</b><small>${nm(g.person)} · ${short(g.start).slice(3)}${g.end !== g.start ? ' → ' + short(g.end).slice(3) : ''} · ${n(g.days)} j</small></div>
-        <button type="button" class="vbtn" data-act="validate" data-id="${g.id}">Valider</button></div>`).join('')}</section>`;
+        ${canValidate(g.person) ? `<button type="button" class="vbtn" data-act="validate" data-id="${g.id}">Valider</button>` : '<span class="waitlbl">en attente</span>'}</div>`).join('')}</section>`;
   }
   const na = (DB.appts || []).filter(a => a.date && a.date >= t).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')))[0];
   if (na) h += `<button type="button" class="card nextappt" data-act="editAppt" data-id="${na.id}"><span class="napi">${ICON.pin}</span><span class="grow"><small>Prochain rendez-vous</small><b>${esc(na.title)} · ${short(na.date)}${na.time ? ' à ' + na.time : ''}</b><small>${esc(na.place || '')}${na.place ? ' · ' : ''}${na.who === 'both' || !na.who ? 'vous deux' : nm(na.who)}</small></span></button>`;
@@ -594,7 +596,7 @@ function renderList() {
   const shown = new Set();
   for (const e of es) {
     const gk = e.person + '|' + (e.note || e.id);
-    const btns = e.status === 'demande' && !shown.has(gk);
+    const btns = e.status === 'demande' && !shown.has(gk) && canValidate(e.person);
     if (btns) shown.add(gk);
     const detail = e.type === 'otbal' ? `${n(e.hours || 0)} h en réserve` : e.type === 'otdone' ? `${n(e.hours || 0)} h${e.times ? ` (${timesText(e.times)})` : ''}` : PARTS[e.part];
     h += `<div class="entry ${pc(e.person)}"><span class="dot"></span><div class="grow"><b>${frDate(e.date)}</b> <span class="muted">${nm(e.person)}</span><br>
@@ -1174,11 +1176,11 @@ function openPeriod(id) {
     .map(([k, l]) => `<option value="${k}"${k === e.type ? ' selected' : ''}>${l}</option>`).join('');
   showDialog(`<h2>${esc(e.note || TYPES[e.type])}</h2>
     <p class="muted">${nm(e.person)} : du ${frDate(first)} au ${frDate(last)}, ${n(days)} jour(s) ${tagHtml(e.status)}</p>
-    ${e.status === 'demande' ? `<div class="btns"><button class="btn pri" data-act="perValidate" data-id="${id}">✓ Valider toute la période</button></div>` : ''}
+    ${e.status === 'demande' && canValidate(e.person) ? `<div class="btns"><button class="btn pri" data-act="perValidate" data-id="${id}">✓ Valider toute la période</button></div>` : ''}
     <h3>Modifier la période</h3>
     <div class="two">${field('Du', `<input type="date" name="pe_start" value="${first}">`)}${field('Au', `<input type="date" name="pe_end" value="${last}">`)}</div>
     ${field('Type', `<select name="pe_type">${tOpts}</select>`)}
-    ${field('Statut', `<select name="pe_status">${['demande', 'prevu', 'pris'].map(k => `<option value="${k}"${k === e.status ? ' selected' : ''}>${{ demande: 'À valider (demandé au chef)', prevu: 'Validé (à venir)', pris: 'Pris' }[k]}</option>`).join('')}</select>`)}
+    ${field('Statut', `<select name="pe_status"${canValidate(e.person) ? '' : ' disabled'}>${['demande', 'prevu', 'pris'].map(k => `<option value="${k}"${k === e.status ? ' selected' : ''}>${{ demande: 'À valider (demandé au chef)', prevu: 'Validé (à venir)', pris: 'Pris' }[k]}</option>`).join('')}</select>`)}
     ${field('Nom de la demande', `<input name="pe_note" value="${esc(e.note || '')}">`)}
     <p class="muted hint">Seuls les jours de travail sont décomptés. Les demi-journées de la période sont conservées.</p>
     <div class="btns end"><button class="btn danger" data-act="perDelete" data-id="${id}">Supprimer la période</button>
@@ -1191,7 +1193,7 @@ function periodRemove(per) {
 function periodSave(id) {
   const e = DB.entries.find(x => x.id === id); if (!e) return;
   const q = k => document.querySelector(`[name=${k}]`);
-  const start = q('pe_start').value, end = q('pe_end').value || start, type = q('pe_type').value, status = q('pe_status').value, note = q('pe_note').value.trim();
+  const start = q('pe_start').value, end = q('pe_end').value || start, type = q('pe_type').value, status = canValidate(e.person) ? q('pe_status').value : e.status, note = q('pe_note').value.trim();
   if (!start || end < start) return toast('Vérifiez les dates.');
   const per = periodOf(e), parts = {}; per.forEach(x => { parts[x.date] = x.part; });
   const old = per.slice(); periodRemove(per);
@@ -1238,7 +1240,7 @@ function entryForm(e, isEdit) {
 function openDay(s) {
   const idx = buildIdx(), hol = holidayName(s);
   const list = (idx[s] || []).map(e => { const per = periodOf(e), multi = per.length > 1; return `<div class="entry ${pc(e.person)}"><span class="dot"></span><div class="grow">${nm(e.person)} : ${TYPES[e.type]}, ${e.type === 'otbal' ? n(e.hours || 0) + ' h' : e.type === 'otdone' ? n(e.hours || 0) + ' h' + (e.times ? ` (${timesText(e.times)})` : '') : PARTS[e.part]} ${tagHtml(e.status)}${e.note ? ` <small class="muted">${esc(e.note)}</small>` : ''}
-    ${multi ? `<br><small class="muted">Période du ${short(per[0].date)} au ${short(per[per.length - 1].date)} (${per.length} j)</small><div class="btns" style="margin:6px 0 0">${e.status === 'demande' ? `<button class="btn sm pri" data-act="perValidate" data-id="${e.id}">✓ Valider la période</button>` : ''}<button class="btn sm" data-act="period" data-id="${e.id}">Modifier la période</button></div>` : ''}</div>
+    ${multi ? `<br><small class="muted">Période du ${short(per[0].date)} au ${short(per[per.length - 1].date)} (${per.length} j)</small><div class="btns" style="margin:6px 0 0">${e.status === 'demande' && canValidate(e.person) ? `<button class="btn sm pri" data-act="perValidate" data-id="${e.id}">✓ Valider la période</button>` : ''}<button class="btn sm" data-act="period" data-id="${e.id}">Modifier la période</button></div>` : ''}</div>
     <button class="iconbtn" data-act="edit" data-id="${e.id}" aria-label="Modifier">✎</button><button class="iconbtn" data-act="del" data-id="${e.id}" aria-label="Supprimer">✕</button></div>`; }).join('');
   showDialog(`<h2>${frDate(s)}</h2>${hol ? `<p class="holname">${esc(hol)}</p>` : ''}
     <p class="muted">${P.map(p => `${nm(p)} : ${dayStateText(p, s)}`).join('<br>')}</p>
@@ -1301,7 +1303,8 @@ function saveEdit(id) {
   const part = f.type === 'otdone' ? 'full' : f.part;
   const r = blockReason(f.who, f.date, f.type, part, id);
   if (r) return toast(`Impossible : ${r}.`);
-  Object.assign(e, { person: f.who, date: f.date, type: f.type, part, status: f.status, u: Date.now() });
+  const status = canValidate(e.person) || f.status === e.status || f.status === 'demande' ? f.status : e.status;
+  Object.assign(e, { person: f.who, date: f.date, type: f.type, part, status, u: Date.now() });
   if (f.type === 'otdone') e.hours = f.hours; else delete e.hours;
   if (f.note) e.note = f.note; else delete e.note;
   save(); $('dlg').close(); render(); toast('Saisie modifiée');
@@ -1491,6 +1494,7 @@ function onClick(ev) {
   else if (a === 'filter') { S.filter = b.dataset.v; render(); }
   else if (a === 'validate' || a === 'refuse') {
     const e = DB.entries.find(x => x.id === b.dataset.id); if (!e) return;
+    if (!canValidate(e.person)) return toast(`Seul(e) ${DB.persons[e.person].name} peut valider ses demandes.`);
     const grp = DB.entries.filter(x => x.status === 'demande' && x.person === e.person && (e.note ? x.note === e.note : x.id === e.id));
     const days = grp.reduce((t, x) => t + (x.type === 'otdone' ? 0 : val(x)), 0);
     const label = e.note ? ` « ${e.note} »` : '';
@@ -1531,6 +1535,7 @@ function onClick(ev) {
   else if (a === 'perSave') periodSave(b.dataset.id);
   else if (a === 'perValidate') {
     const e = DB.entries.find(x => x.id === b.dataset.id); if (!e) return;
+    if (!canValidate(e.person)) return toast(`Seul(e) ${DB.persons[e.person].name} peut valider ses demandes.`);
     const per = periodOf(e).filter(x => x.status === 'demande'), t = todayISO();
     per.forEach(x => { x.status = x.date <= t ? 'pris' : 'prevu'; x.u = Date.now(); });
     save(); if ($('dlg').open) $('dlg').close(); render(); toast(`${n(per.reduce((s2, x) => s2 + val(x), 0))} jour(s) validé(s)`);
