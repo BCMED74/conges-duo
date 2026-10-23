@@ -37,7 +37,7 @@ html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 Manrope,
 body{padding-bottom:calc(96px + env(safe-area-inset-bottom))}
 button{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--a);outline-offset:2px}
-.hide{display:none!important}
+.hide,[hidden]{display:none!important}
 .muted{color:var(--mute);font-size:13px}
 .center{text-align:center}
 header.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;
@@ -113,8 +113,27 @@ main{max-width:720px;margin:0 auto;padding:6px 16px 16px;animation:fade .25s eas
 .pendrow{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
 .pendrow .grow{flex:1;min-width:0;display:flex;flex-direction:column}
 .pendrow small{font-size:12px;color:var(--mute)}
+.garde{display:flex;flex-direction:column;gap:3px}
+.gnow{font-size:20px;font-weight:800}
+.gnext{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mute);margin-top:6px;padding-top:8px;border-top:1px solid var(--line)}
+.gdot{display:inline-block;width:10px;height:10px;border-radius:50%;flex:none;vertical-align:1px}
+.g-p1{background:var(--a)} .g-p2{background:#16A34A}
+.gnow.g-p1,.gnow.g-p2{background:none}
+.gnow.g-p1{color:var(--a-ink)} .gnow.g-p2{color:#15803D}
+.lane .h.g-p1bg{background:var(--a)} .lane .h.g-p2bg{background:#16A34A}
+.ride{font-size:13px;font-weight:700;margin-top:4px}
+.rowbtn{width:100%;border:0;background:none;text-align:left;cursor:pointer;font:inherit;color:inherit}
+.famtag{display:inline-block;font-size:11px;font-weight:800;color:#6D28D9;background:#EDE9FE;border-radius:8px;padding:2px 8px;vertical-align:3px}
+.fchip{font-size:12px;font-weight:700;background:var(--work);border-radius:10px;padding:3px 9px}
+.day.kid{box-shadow:inset 0 -3px 0 #8B5CF6}
+.day.kid.today{box-shadow:inset 0 0 0 2px var(--ink),inset 0 -4px 0 #8B5CF6}
+.kidsw{display:inline-block;width:22px;height:4px;border-radius:2px;background:#8B5CF6}
+.chips2.wrap{flex-wrap:wrap}
+.chip2.ck{flex:0 1 auto;padding:0 14px;cursor:pointer}
+.chip2.ck input{position:absolute;opacity:0;pointer-events:none}
+.chip2.ck:has(input:checked){border-color:var(--a);background:var(--a-soft);color:var(--a-ink)}
 .waitlbl{font-size:12px;font-weight:700;color:var(--mute);background:var(--work);border-radius:10px;padding:6px 10px;white-space:nowrap}
-.vbtn{height:44px;padding:0 14px;border:0;border-radius:12px;background:var(--cs);color:var(--ci);font-weight:800;font-size:13px;cursor:pointer}
+.vbtn{height:44px;padding:0 14px;border:0;border-radius:12px;background:var(--cs,var(--a-soft));color:var(--ci,var(--a-ink));font-weight:800;font-size:13px;cursor:pointer}
 .nextappt{display:flex;align-items:center;gap:12px;width:100%;text-align:left;cursor:pointer}
 .nextappt .grow{flex:1;display:flex;flex-direction:column}
 .nextappt small{font-size:12px;color:var(--mute)}

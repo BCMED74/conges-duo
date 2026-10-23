@@ -4,7 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'congesDuo.v1';
-const APP_VERSION = '2026-10-23 n°13';
+const APP_VERSION = '2026-10-23 n°15';
 const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
@@ -333,8 +333,9 @@ function render() {
   $('yearLbl').textContent = S.year;
   const sub = ['ponts', 'list', 'set'].includes(S.view);
   document.querySelectorAll('nav.tabs button[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === (sub ? 'more' : S.view)));
-  const v = { home: renderHome, cal: renderCal, ponts: renderPonts, list: renderList, trips: renderAgenda, set: renderSet, more: renderMore }[S.view];
-  $('view').innerHTML = (sub ? '<button type="button" class="back" data-act="tab" data-v="more">‹ Plus</button>' : '') + v();
+  const v = famOnly() ? ({ home: renderFamHome, cal: renderFamCal, trips: renderFamAgenda }[S.view] || renderFamMore)
+    : { home: renderHome, cal: renderCal, ponts: renderPonts, list: renderList, trips: renderAgenda, set: renderSet, more: renderMore }[S.view];
+  $('view').innerHTML = (sub && !famOnly() ? '<button type="button" class="back" data-act="tab" data-v="more">‹ Plus</button>' : '') + v();
   setSyncState();
   const sv = $('swver');
   if (sv && typeof caches !== 'undefined') caches.keys().then(k => { sv.textContent = 'cache ' + (k.filter(x => x.startsWith('conges-duo')).join(', ') || 'aucun'); }).catch(() => {});
@@ -428,7 +429,7 @@ function renderHome() {
   let h = (S.invite ? '' : iosHint());
   h += `<header class="hello"><span class="muted">${longDate(t)}</span><h2>Bonjour ${nm(me)}</h2></header>`;
   h += `<div class="today">${order.map(p => { const st = todayStatus(p, t, idx); return `<div class="tcard ${pc(p)}"><span class="tname"><span class="dot"></span>${p === SY.me ? 'Toi' : nm(p)}</span><b>${st.label}</b><small>${esc(st.sub)}</small></div>`; }).join('')}</div>`;
-  h += homeSetup() + dstCard();
+  h += homeSetup() + (famOn() ? famRequests() : '') + dstCard();
   const nt = nextTogether(idx);
   if (nt) {
     const bars = Array.from({ length: Math.min(nt.len, 14) }, (_, i) => `<span class="${i % 2 ? 'pb' : 'pa'}"></span>`).join('');
@@ -520,10 +521,11 @@ function renderCal() {
   const hols = [], trips = (DB.trips || []).filter(x => x.start);
   for (let d = 1; d <= dim; d++) {
     const s = iso(y, m, d), hol = holidayName(s), ia = dayInfo('a', s, idx), ib = dayInfo('b', s, idx);
-    const trip = trips.some(x => s >= x.start && s <= (x.end || x.start)), appt = (DB.appts || []).some(x => x.date === s);
+    const trip = trips.some(x => s >= x.start && s <= (x.end || x.start)), appt = (DB.appts || []).some(x => x.date === s) || (famOn() && famApptsOn(s).length > 0);
+    const kid = famOn() && (gardeAt(s) || {}).with === 'p1';
     if (hol) hols.push(`${short(s)} : ${hol}`);
     const both = ia.amOff && ia.pmOff && ib.amOff && ib.pmOff;
-    g += `<button class="day${hol ? ' hol' : ''}${s === t ? ' today' : ''}${both ? ' both' : ''}" data-act="day" data-d="${s}">
+    g += `<button class="day${hol ? ' hol' : ''}${s === t ? ' today' : ''}${both ? ' both' : ''}${kid ? ' kid' : ''}" data-act="day" data-d="${s}">
       <span class="num">${d}${trip || appt ? `<small class="mk">${trip ? '✈' : ''}${appt ? '📌' : ''}</small>` : ''}</span>${both ? '<span class="star" title="Off tous les deux">★</span>' : ''}${ia.ot || ib.ot ? '<span class="otm">h</span>' : ''}
       ${lane('a', ia)}${lane('b', ib)}</button>`;
   }
@@ -543,7 +545,8 @@ function renderCal() {
     <span><b class="starl">★</b> Off tous les deux</span>
     <span><b class="otl">h</b> Heures sup</span>
     <span><b>✈</b> Voyage</span>
-    <span><b>📌</b> Rendez-vous</span></div>`;
+    <span><b>📌</b> Rendez-vous</span>
+    ${famOn() ? `<span><span class="kidsw"></span> Garde chez ${parentName('p1')}</span>` : ''}</div>`;
   return g;
 }
 
@@ -680,6 +683,7 @@ function renderSet() {
     ${admin ? subs.map(([k, v]) => `<div class="row"><span>${esc(v.name || '')} (${esc((DB.persons[v.person] || {}).name || '')})</span><b><button class="btn sm danger" data-act="delSub" data-id="${k}">Retirer</button></b></div>`).join('') : ''}
     <div class="btns"><button class="btn sm pri" data-act="pushOn">Activer sur ce téléphone</button>
     ${admin ? `<button class="btn sm" data-act="genKeys">${DB.push && DB.push.publicKey ? 'Recréer les clés' : 'Créer les clés'}</button>` : ''}</div>`);
+  h += famSettings();
   h += dstSettings();
   const hist = SY.owner && SY.repo ? `https://github.com/${encodeURIComponent(SY.owner)}/${encodeURIComponent(SY.repo)}/commits/main/${SY.path.split('/').map(encodeURIComponent).join('/')}` : '';
   if (!admin) h += sect('sync', '<span class="grow">Sauvegarde</span>', `<p class="syncline" id="syncStatus">${syncText()}</p>
@@ -973,14 +977,16 @@ function apptCard(a) {
     <div class="btns">${a.date ? `<a class="btn sm" href="${apptGcal(a)}" target="_blank" rel="noopener">Google Agenda</a><button class="btn sm" data-act="apptIcs" data-id="${a.id}">Agenda iPhone (.ics)</button>` : ''}</div></section>`;
 }
 function renderAgenda() {
-  const t = todayISO(), ap = DB.appts || [];
+  const t = todayISO(), ap = (DB.appts || []).concat(famOn() ? FY.appts.filter(a => a.repeat !== 'weekly') : []);
   const up = ap.filter(a => !a.date || a.date >= t).sort((a, b) => ((a.date || '9') + (a.time || '')).localeCompare((b.date || '9') + (b.time || '')));
   const past = ap.filter(a => a.date && a.date < t).sort((a, b) => b.date.localeCompare(a.date));
   let h = `<div class="btns"><button class="btn pri" data-act="newAppt">+ Rendez-vous</button><button class="btn" data-act="newTrip">+ Voyage</button></div>
     <h3 class="sec">Rendez-vous</h3>`;
-  h += up.length ? up.map(apptCard).join('') : '<p class="muted">Aucun rendez-vous à venir.</p>';
-  if (past.length) h += sect('pastAppt', `<span class="grow">Rendez-vous passés (${past.length})</span>`, past.map(apptCard).join(''));
-  return h + `<h3 class="sec">Voyages</h3>` + renderTrips();
+  const card = a => (Array.isArray(a.who) ? famApptCard(a) : apptCard(a));
+  h += up.length ? up.map(card).join('') : '<p class="muted">Aucun rendez-vous à venir.</p>';
+  if (past.length) h += sect('pastAppt', `<span class="grow">Rendez-vous passés (${past.length})</span>`, past.map(card).join(''));
+  const acts = famOn() ? FY.appts.filter(a => a.repeat === 'weekly' && (!a.until || a.until >= t)) : [];
+  return h + (acts.length ? `<h3 class="sec">Activités chaque semaine</h3>${acts.map(famApptCard).join('')}` : '') + (famOn() ? gardeSection() + FY.members.filter(m => m.role === 'enfant').map(m => packList(m.id)).join('') : '') + `<h3 class="sec">Voyages</h3>` + renderTrips();
 }
 function remRow(r) {
   return `<div class="two rem" style="grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto;align-items:end">
@@ -988,13 +994,22 @@ function remRow(r) {
     ${field('&nbsp;', `<select name="rm_u">${Object.entries(REM_UNITS).map(([k, l]) => `<option value="${k}"${k === r.u ? ' selected' : ''}>${l} avant</option>`).join('')}</select>`)}
     <button class="iconbtn" data-act="delRem" aria-label="Retirer ce rappel" style="margin-bottom:2px">✕</button></div>`;
 }
-function openAppt(id) {
-  const a = (DB.appts || []).find(x => x.id === id) || { who: S.addWho || 'both', date: todayISO(), reminders: [{ n: 2, u: 'h' }, { n: 45, u: 'm' }] };
+function openAppt(id, date) {
+  const fa = FY.appts.find(x => x.id === id);
+  const a = (DB.appts || []).find(x => x.id === id) || fa || { who: famOnly() ? [FSY.me] : S.addWho || 'both', date: date || todayISO(), reminders: [{ n: 2, u: 'h' }, { n: 45, u: 'm' }] };
+  const fam = famOnly() || !!fa || !!S.famNew;
+  const rep0 = a.repeat === 'weekly' || (!id && S.famRepeat);
+  const famWhoHtml = famOn() ? `<div data-row="famwho"${fam ? '' : ' hidden'}><div class="field"><span class="lbl">Qui est concerné</span><div class="chips2 wrap">${FY.members.map(m => `<label class="chip2 ck"><input type="checkbox" name="a_fwho" value="${m.id}"${(Array.isArray(a.who) ? a.who : [FSY.me]).includes(m.id) ? ' checked' : ''}><span>${esc(m.name)}</span></label>`).join('')}</div></div>
+    ${field('Qui emmène ?', `<select name="a_ride"><option value="">—</option>${['p1', 'p2', 'seule', 'bus'].map(k => `<option value="${k}"${a.ride === k ? ' selected' : ''}>${k === 'p1' || k === 'p2' ? esc(FY.parents[k]) : RIDES[k]}</option>`).join('')}</select>`)}
+    <label class="check"><input type="checkbox" name="a_rep" data-reptoggle="1"${rep0 ? ' checked' : ''}> Répéter chaque semaine (activité)</label>
+    <div data-row="until"${rep0 ? '' : ' hidden'}>${field('Jusqu\u2019au (optionnel)', `<input type="date" name="a_until" value="${a.until || ''}">`)}</div></div>` : '';
   showDialog(`<h2>${id ? 'Modifier le rendez-vous' : 'Nouveau rendez-vous'}</h2>
     ${field('Titre', `<input name="a_title" value="${esc(a.title || '')}" placeholder="ex. Notaire, mariage, rendez-vous banque">`)}
     <div class="two">${field('Date', `<input type="date" name="a_date" value="${a.date || ''}">`)}${field('Lieu', `<input name="a_place" value="${esc(a.place || '')}">`)}</div>
     <div class="two">${field('Heure', `<input type="time" name="a_time" value="${a.time || ''}">`)}${field('Fin (optionnel)', `<input type="time" name="a_end" value="${a.end || ''}">`)}</div>
-    <div class="field"><span class="lbl">Qui doit être présent</span>${radios('a_who', [['a', nm('a')], ['b', nm('b')], ['both', 'Les deux']], a.who || 'both')}</div>
+    ${famOn() && !famOnly() ? `<label class="check"><input type="checkbox" name="a_fam" data-famtoggle="1"${fam ? ' checked' : ''}> Partager avec l\u2019espace famille</label>` : ''}
+    ${famOnly() ? '' : `<div class="field" data-row="mainwho"${fam ? ' hidden' : ''}><span class="lbl">Qui doit être présent</span>${radios('a_who', [['a', nm('a')], ['b', nm('b')], ['both', 'Les deux']], typeof a.who === 'string' ? a.who : 'both')}</div>`}
+    ${famWhoHtml}
     <div id="rems">${(a.reminders || []).map(remRow).join('')}</div>
     <div class="btns"><button class="btn sm" data-act="addRem">+ Ajouter un rappel</button></div>
     <p class="muted">Les rappels arrivent en notification sur le téléphone de chaque personne concernée (à 30 minutes près).</p>
@@ -1007,11 +1022,25 @@ function saveAppt(id) {
   const title = q('a_title').value.trim(); if (!title) return toast('Donnez un titre au rendez-vous.');
   const ns = [...document.querySelectorAll('[name=rm_n]')], us = [...document.querySelectorAll('[name=rm_u]')];
   const reminders = ns.map((el, i) => ({ n: Math.max(1, parseInt(el.value, 10) || 0), u: us[i].value })).filter(r => r.n > 0);
+  const fam = famOnly() || !!(q('a_fam') && q('a_fam').checked);
+  const fields = { title, date: q('a_date').value, time: q('a_time').value, end: q('a_end').value, place: q('a_place').value.trim(), notes: q('a_notes').value.trim(), reminders, u: Date.now() };
   DB.appts = DB.appts || [];
-  let a = DB.appts.find(x => x.id === id);
-  if (!a) { a = { id: uid() }; DB.appts.push(a); }
-  Object.assign(a, { title, date: q('a_date').value, time: q('a_time').value, end: q('a_end').value, place: q('a_place').value.trim(),
-    who: (document.querySelector('[name=a_who]:checked') || {}).value || 'both', notes: q('a_notes').value.trim(), reminders, u: Date.now() });
+  const inMain = DB.appts.find(x => x.id === id), inFam = FY.appts.find(x => x.id === id);
+  S.famNew = false;
+  if (fam) {
+    const who = [...document.querySelectorAll('[name=a_fwho]:checked')].map(x => x.value);
+    if (!who.length) return toast('Cochez au moins une personne concernée.');
+    if (inMain) { DB.appts = DB.appts.filter(x => x.id !== id); DB.deleted[id] = Date.now(); save(); }
+    let a = inFam; if (!a) { a = { id: id || 'f' + uid() }; FY.appts.push(a); }
+    const repeat = q('a_rep') && q('a_rep').checked ? 'weekly' : '';
+    Object.assign(a, fields, { who, ride: (q('a_ride') || {}).value || '', repeat, until: repeat ? (q('a_until') || {}).value || '' : '' });
+    S.famRepeat = false; famSave(); $('dlg').close(); render(); toast(repeat ? 'Activité enregistrée (chaque semaine)' : 'Rendez-vous partagé avec la famille');
+    return;
+  }
+  if (inFam) { FY.appts = FY.appts.filter(x => x.id !== id); FY.deleted[id] = Date.now(); famSave(); }
+  let a = inMain;
+  if (!a) { a = { id: id || uid() }; DB.appts.push(a); }
+  Object.assign(a, fields, { who: (document.querySelector('[name=a_who]:checked') || {}).value || 'both' });
   save(); $('dlg').close(); render();
   const w = apptWarn(a); toast(w.length ? `Enregistré. Attention : ${w.join(', ')}.` : 'Rendez-vous enregistré');
 }
@@ -1026,16 +1055,17 @@ function apptTimes(a) {
 function apptGcal(a) {
   const d = ymd(a.date);
   const t = apptTimes(a), dates = `${d}T${t.st}/${d}T${t.en}`;
-  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(a.title)}&dates=${dates}&ctz=Europe/Zurich&location=${encodeURIComponent(a.place || '')}&details=${encodeURIComponent(a.notes || '')}`;
+  const rr = a.repeat === 'weekly' ? `&recur=${encodeURIComponent('RRULE:FREQ=WEEKLY' + (a.until ? ';UNTIL=' + ymd(a.until) + 'T235959Z' : ''))}` : '';
+  return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(a.title)}&dates=${dates}${rr}&ctz=Europe/Zurich&location=${encodeURIComponent(a.place || '')}&details=${encodeURIComponent(a.notes || '')}`;
 }
 function apptIcs(id) {
-  const a = (DB.appts || []).find(x => x.id === id); if (!a || !a.date) return;
+  const a = (DB.appts || []).find(x => x.id === id) || FY.appts.find(x => x.id === id); if (!a || !a.date) return;
   const d = ymd(a.date), clean = s => String(s || '').replace(/[\\;,]/g, m => '\\' + m).replace(/\n/g, '\\n');
   const t = apptTimes(a), start = `DTSTART:${d}T${t.st}`, end = `DTEND:${d}T${t.en}`;
   const alarms = (a.reminders || []).map(r => ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${clean(a.title)}`,
     `TRIGGER:-P${r.u === 'd' ? `${r.n}D` : `T${r.n}${r.u === 'h' ? 'H' : 'M'}`}`, 'END:VALARM'].join('\r\n'));
   download(`rendez-vous-${d}.ics`, ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Conges Duo//FR', 'BEGIN:VEVENT', `UID:${a.id}@conges-duo`,
-    `DTSTAMP:${d}T000000Z`, start, end, `SUMMARY:${clean(a.title)}`, a.place ? `LOCATION:${clean(a.place)}` : '', a.notes ? `DESCRIPTION:${clean(a.notes)}` : '',
+    `DTSTAMP:${d}T000000Z`, start, end, a.repeat === 'weekly' ? 'RRULE:FREQ=WEEKLY' + (a.until ? ';UNTIL=' + ymd(a.until) + 'T235959Z' : '') : '', `SUMMARY:${clean(a.title)}`, a.place ? `LOCATION:${clean(a.place)}` : '', a.notes ? `DESCRIPTION:${clean(a.notes)}` : '',
     ...alarms, 'END:VEVENT', 'END:VCALENDAR'].filter(Boolean).join('\r\n'), 'text/calendar');
 }
 
@@ -1051,6 +1081,7 @@ async function genVapid() {
   const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
   const pub = b64u(await crypto.subtle.exportKey('raw', kp.publicKey)), priv = (await crypto.subtle.exportKey('jwk', kp.privateKey)).d;
   DB.push = { ...(DB.push || {}), publicKey: pub, u: Date.now() }; save();
+  if (famOn() && !famOnly()) { FY.push = { publicKey: pub, dst: false, u: Date.now() }; famSave(); }
   showDialog(`<h2>Clés de notification créées</h2>
     <p class="muted">Copiez ces deux clés dans les secrets du repo privé (voir la procédure). La clé privée n\u2019est affichée qu\u2019une fois et n\u2019est enregistrée nulle part dans l\u2019app.</p>
     ${field('VAPID_PUBLIC_KEY', `<textarea readonly rows="3" id="k_pub">${pub}</textarea>`)}
@@ -1093,6 +1124,12 @@ function inviteCode() {
 function joinWithCode() {
   const raw = ($('joinCode') || {}).value || '';
   try {
+    const f = raw.trim().match(/CDF1\.([A-Za-z0-9_-]+)/);
+    if (f) {
+      const j = JSON.parse(new TextDecoder().decode(ub64u(f[1])));
+      Object.assign(FSY, { owner: j.o, repo: j.r, path: j.p, token: j.t, me: j.me, famOnly: true, error: '', dirty: false }); famSaveSync();
+      FY = famDefault(); famSaveLocal(); S.view = 'home'; render(); toast('Connexion…'); famSync(true); return;
+    }
     const m = raw.trim().match(/CD1\.([A-Za-z0-9_-]+)/); if (!m) throw new Error();
     const j = JSON.parse(new TextDecoder().decode(ub64u(m[1])));
     Object.assign(SY, { owner: j.o, repo: j.r, path: j.p, token: j.t, me: j.me, device: j.dev, error: '', force: false, dirty: false }); saveSync();
@@ -1107,7 +1144,7 @@ function openAdd() {
     <span class="lbl">Pour qui</span>
     <div class="chips2">${chip('a', SY.me === 'a' ? 'Moi' : nm('a'), 1)}${chip('b', SY.me === 'b' ? 'Moi' : nm('b'), 1)}${chip('both', 'Les deux')}</div>
     <span class="lbl">Quoi</span>
-    <div class="tiles">${tile('addLeave', ICON.beach, 'Congé', 'absence, travail en plus')}${tile('addHours', ICON.clock, 'Horaires', 'arrivée, départ, midi')}${tile('newAppt', ICON.pin.replace(/20/g, '24'), 'Rendez-vous', 'avec rappels')}${tile('newTrip', ICON.plane, 'Voyage', 'billets, hôtel')}</div>`);
+    <div class="tiles">${tile('addLeave', ICON.beach, 'Congé', 'absence, travail en plus')}${tile('addHours', ICON.clock, 'Horaires', 'arrivée, départ, midi')}${tile('newAppt', ICON.pin.replace(/20/g, '24'), 'Rendez-vous', 'avec rappels')}${tile('newTrip', ICON.plane, 'Voyage', 'billets, hôtel')}${famOn() ? tile('famAppt', ICON.pin.replace(/20/g, '24'), 'Rendez-vous famille', 'partagé avec l\u2019ado') + tile('newGarde', ICON.list, 'Garde', 'période chez un parent') : ''}</div>`);
 }
 function showNotif(t, b) {
   showDialog(`<h2>${esc(t || 'Congés Duo')}</h2><p style="font-size:16px">${esc(b || '')}</p>
@@ -1129,7 +1166,7 @@ function lastNotifCard() {
     <div class="btns"><button class="btn sm" data-act="tab" data-v="trips">Voir l\u2019agenda</button><button class="btn sm" data-act="notifSeen">OK, lu</button></div></section>`;
 }
 function inviteGuide() {
-  const ios = isIOS(), n = (() => { try { return JSON.parse(new TextDecoder().decode(ub64u(S.invite.slice(4)))).dev.replace('Téléphone ', ''); } catch (e) { return ''; } })();
+  const ios = isIOS(), n = (() => { try { return JSON.parse(new TextDecoder().decode(ub64u(S.invite.split('.')[1]))).dev.replace('Téléphone ', ''); } catch (e) { return ''; } })();
   return `<section class="card hint-ios" style="font-size:16px"><h2>Bienvenue${n ? ' ' + esc(n) : ''} 👋</h2>
     <p>Trois étapes pour installer Congés Duo et retrouver vos congés et rendez-vous.</p>
     <p><b>1.</b> Copiez votre code personnel :</p>
@@ -1142,10 +1179,12 @@ function homeSetup() {
   if (S.invite && !isStandalone()) return inviteGuide();
   if (isIOS() && !isStandalone()) return '';
   let h = lastNotifCard();
-  if (!syncOn() && !DB.entries.length) h += `<section class="card hint-ios"><b>Rejoindre avec un code d\u2019invitation</b><br><span class="muted">Collez le code reçu, l\u2019app récupère toutes vos données.</span>
+  if (!syncOn() && !famOn() && !DB.entries.length) h += `<section class="card hint-ios"><b>Rejoindre avec un code d\u2019invitation</b><br><span class="muted">Collez le code reçu, l\u2019app récupère toutes vos données.</span>
     <div class="btns"><button class="btn pri" data-act="pasteJoin">Coller mon code et rejoindre</button></div>
     <textarea id="joinCode" rows="3" placeholder="ou collez le code ici : CD1.…" style="margin-top:8px"></textarea><div class="btns"><button class="btn" data-act="join">Rejoindre</button></div></section>`;
-  if (DB.push && DB.push.publicKey && SY.me && !pushOk()) h += `<section class="card hint-ios"><b>🔔 Notifications</b><br>Activez-les pour recevoir les rappels de rendez-vous sur ce téléphone.
+  if (famOnly()) { if (FY.push.publicKey && !famPushOk()) h += `<section class="card hint-ios"><b>🔔 Notifications</b><br>Active-les pour recevoir les rappels et les changements de garde.
+    <div class="btns"><button class="btn pri" data-act="famPushOn">Activer les notifications</button></div></section>`; }
+  else if (DB.push && DB.push.publicKey && SY.me && !pushOk()) h += `<section class="card hint-ios"><b>🔔 Notifications</b><br>Activez-les pour recevoir les rappels de rendez-vous sur ce téléphone.
     <div class="btns"><button class="btn pri" data-act="pushOn">Activer les notifications</button></div></section>`;
   return h;
 }
@@ -1208,6 +1247,322 @@ function periodSave(id) {
   toast(`${n(created.reduce((t, x) => t + val(x), 0))} jour(s) enregistrés` + (skipped.length ? `, ignorés : ${skipped.join(', ')}` : ''));
 }
 
+/* ================= Espace famille (repo privé séparé) =================
+   Les données partagées avec les enfants vivent dans un AUTRE repo privé, avec une AUTRE clé.
+   Un téléphone qui n'a que la clé « famille » ne peut techniquement rien lire d'autre. */
+const FAM_KEY = 'congesDuo.famille.v1', FSYNC_KEY = 'congesDuo.famsync';
+const famDefault = () => ({ version: 1, su: 0, members: [], parents: { p1: 'Papa', p2: 'Maman' }, appts: [], garde: [], items: [], subs: {}, push: {}, deleted: {} });
+let FY = famDefault();
+let FSY = { owner: '', repo: 'conges-duo-famille', path: 'donnees.json', token: '', me: '', lastSync: '', dirty: false, error: '', famOnly: false };
+let famTimer = null, famBusy = false, famAgain = false;
+function famMigrate(d) {
+  const def = famDefault(); d = d || {};
+  const arr = k => (Array.isArray(d[k]) ? d[k] : []), obj = k => (d[k] && typeof d[k] === 'object' && !Array.isArray(d[k]) ? d[k] : {});
+  return { version: 1, su: +d.su || 0, members: arr('members'), parents: { ...def.parents, ...obj('parents') }, appts: arr('appts'), garde: arr('garde'), items: arr('items'), subs: obj('subs'), push: obj('push'), deleted: obj('deleted') };
+}
+function famLoad() {
+  try { FY = famMigrate(JSON.parse(localStorage.getItem(FAM_KEY) || '{}')); } catch (e) { FY = famDefault(); }
+  try { FSY = { ...FSY, ...JSON.parse(localStorage.getItem(FSYNC_KEY) || '{}') }; } catch (e) { /* défaut */ }
+}
+function famSaveLocal() { if (typeof localStorage !== 'undefined') localStorage.setItem(FAM_KEY, JSON.stringify(FY)); }
+function famSaveSync() { if (typeof localStorage !== 'undefined') localStorage.setItem(FSYNC_KEY, JSON.stringify(FSY)); }
+function famSave() { famSaveLocal(); if (typeof localStorage === 'undefined') return; FSY.dirty = true; famSaveSync(); setSyncState(); famSchedule(); }
+const famOn = () => !!(FSY.owner && FSY.repo && FSY.token);
+const famOnly = () => !!FSY.famOnly && famOn();
+const famName = id => ((FY.members.find(m => m.id === id) || {}).name || '');
+const famMe = () => FY.members.find(m => m.id === FSY.me) || null;
+const famAdult = () => !famOnly() || (famMe() && famMe().role === 'adulte');
+function famMerge(local, remote) {
+  const L = famMigrate(local), R = famMigrate(remote), N = R.su > L.su ? R : L;
+  const out = { version: 1, su: Math.max(L.su, R.su), members: N.members, parents: N.parents, appts: [], garde: [], items: [], subs: { ...R.subs }, push: (+L.push.u || 0) >= (+R.push.u || 0) ? L.push : R.push, deleted: {} };
+  for (const src of [L.deleted, R.deleted]) for (const id in src) out.deleted[id] = Math.max(out.deleted[id] || 0, +src[id] || 0);
+  for (const k of ['appts', 'garde', 'items']) {
+    const m = {};
+    for (const x of [...R[k], ...L[k]]) { const c = m[x.id]; if (!c || (+x.u || 0) > (+c.u || 0)) m[x.id] = x; }
+    out[k] = Object.values(m).filter(x => !(out.deleted[x.id] >= (+x.u || 0))).sort((a, b) => a.id.localeCompare(b.id));
+  }
+  for (const k in L.subs) if (!out.subs[k] || (+L.subs[k].u || 0) > (+out.subs[k].u || 0)) out.subs[k] = L.subs[k];
+  return out;
+}
+function famSchedule(delay = 2500) { if (!famOn()) return; clearTimeout(famTimer); famTimer = setTimeout(() => famSync(false), delay); }
+const famRepoUrl = () => `/repos/${encodeURIComponent(FSY.owner)}/${encodeURIComponent(FSY.repo)}`;
+const famFileUrl = () => `${famRepoUrl()}/contents/${FSY.path.split('/').map(encodeURIComponent).join('/')}`;
+async function famSync(manual) {
+  if (!famOn()) return;
+  if (famBusy) { famAgain = true; return; }
+  if (navigator.onLine === false) { if (manual) toast('Pas de connexion.'); return; }
+  famBusy = true;
+  try {
+    let done = false;
+    for (let i = 0; i < 3 && !done; i++) {
+      const g = await gh('GET', famFileUrl(), null, FSY.token);
+      let remote = null, sha;
+      if (g.status === 200 && g.data && g.data.content != null) { remote = JSON.parse(b64dec(g.data.content)); sha = g.data.sha; }
+      else if (g.status === 404) { const r = await gh('GET', famRepoUrl(), null, FSY.token); if (r.status !== 200) throw syncError(r.status, true); }
+      else throw syncError(g.status, false);
+      const before = JSON.stringify(FY);
+      const next = remote ? famMerge(FY, remote) : famMerge(FY, FY);
+      FY = next; famSaveLocal();
+      if (JSON.stringify(FY) !== before && S.view !== 'set') render();
+      if (remote && JSON.stringify(next) === JSON.stringify(famMerge(remote, remote))) { done = true; break; }
+      const p = await gh('PUT', famFileUrl(), { message: `Congés Duo famille : mise à jour (${famName(FSY.me) || 'appareil'})`, content: b64enc(JSON.stringify(next, null, 1)), ...(sha ? { sha } : {}) }, FSY.token);
+      if (p.ok) done = true; else if (p.status !== 409 && p.status !== 422) throw syncError(p.status, p.status === 404);
+    }
+    if (!done) throw new Error('Conflit avec une autre modification : réessayez.');
+    FSY.dirty = false; FSY.error = ''; FSY.lastSync = new Date().toISOString(); famSaveSync();
+    if (manual) toast('Espace famille synchronisé');
+  } catch (err) {
+    FSY.error = err instanceof TypeError ? 'Pas de connexion : la synchro se fera au retour du réseau.' : err.message; famSaveSync();
+    if (manual) toast(FSY.error);
+  } finally { famBusy = false; setSyncState(); if (famAgain) { famAgain = false; famSchedule(400); } }
+}
+// Première connexion d'un adulte : crée son profil et recopie la clé de notification.
+async function famConnect() {
+  if (!famOn()) return;
+  FSY.famOnly = false; famSaveSync();
+  await famSync(true);
+  if (FSY.error) return;
+  let me = FY.members.find(m => m.id === FSY.me);
+  if (!me) {
+    const myName = DB.persons[SY.me || 'a'].name;
+    me = FY.members.find(m => m.role === 'adulte' && m.name === myName);
+    if (!me) { me = { id: 'm' + uid(), name: myName, role: 'adulte', u: Date.now() }; FY.members.push(me); FY.su = Date.now(); }
+    FSY.me = me.id; famSaveSync();
+  }
+  if (DB.push && DB.push.publicKey && FY.push.publicKey !== DB.push.publicKey) FY.push = { publicKey: DB.push.publicKey, dst: false, u: Date.now() };
+  famSave(); render();
+}
+
+/* ----- Garde ----- */
+function gardeAt(s) {
+  let best = null;
+  for (const g of FY.garde) if (g.status !== 'demande' && g.start <= s && s <= (g.end || g.start) && (!best || g.start > best.start || (g.start === best.start && (g.end || g.start) < (best.end || best.start)))) best = g;
+  return best;
+}
+const parentName = w => esc(FY.parents[w] || w);
+function gardeRuns(from, days) {
+  const out = []; let cur = null;
+  for (let i = 0; i < days; i++) {
+    const d = addDays(from, i), g = gardeAt(d), w = g ? g.with : null, note = g && g.note ? g.note : '';
+    if (cur && cur.w === w && cur.note === note) cur.end = d;
+    else { if (cur) out.push(cur); cur = { w, note, start: d, end: d }; }
+  }
+  if (cur) out.push(cur);
+  return out.filter(r => r.w);
+}
+function gardeCard() {
+  const t = todayISO(), runs = gardeRuns(t, 60), now = runs[0] && runs[0].start === t ? runs[0] : null, next = runs.find(r => r.start > t);
+  if (!runs.length) return '';
+  const kidNames = FY.members.filter(m => m.role === 'enfant').map(m => esc(m.name)).join(', ');
+  return `<section class="card garde"><span class="muted">${famOnly() ? 'Où je suis' : 'Garde · ' + kidNames}</span>
+    ${now ? `<b class="gnow g-${now.w}">${famOnly() ? 'Chez ' : 'Chez '}${parentName(now.w)}</b><small>jusqu\u2019au ${short(now.end)}${now.note ? ' · ' + esc(now.note) : ''}</small>` : '<b>Pas de garde notée aujourd\u2019hui</b>'}
+    ${next ? `<div class="gnext"><span class="gdot g-${next.w}"></span>Ensuite : chez ${parentName(next.w)} dès le ${short(next.start)}${next.note ? ' · ' + esc(next.note) : ''}</div>` : ''}</section>`;
+}
+function openGarde(id) {
+  const g = FY.garde.find(x => x.id === id) || { with: 'p1', start: todayISO(), end: addDays(todayISO(), 6) };
+  showDialog(`<h2>${id ? 'Modifier la période' : 'Période de garde'}</h2>
+    <div class="field"><span class="lbl">Chez</span>${radios('g_with', [['p1', parentName('p1')], ['p2', parentName('p2')]], g.with)}</div>
+    <div class="two">${field('Du', `<input type="date" name="g_start" value="${g.start}">`)}${field('Au (inclus)', `<input type="date" name="g_end" value="${g.end || g.start}">`)}</div>
+    ${field('Note (vacances, activité…)', `<input name="g_note" value="${esc(g.note || '')}" placeholder="ex. Vacances au ski">`)}
+    <p class="muted">Une période plus courte posée par-dessus une autre (vacances, échange) la remplace pendant ses dates.</p>
+    <div class="btns end">${id ? `<button class="btn danger" data-act="delGarde" data-id="${id}">Supprimer</button>` : ''}<button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveGarde" data-id="${id || ''}">Enregistrer</button></div>`);
+}
+function saveGarde(id) {
+  const q = k => document.querySelector(`[name=${k}]`), start = q('g_start').value, end = q('g_end').value || start;
+  if (!start || end < start) return toast('Vérifiez les dates.');
+  let g = FY.garde.find(x => x.id === id);
+  if (!g) { g = { id: 'g' + uid() }; FY.garde.push(g); }
+  Object.assign(g, { with: (document.querySelector('[name=g_with]:checked') || {}).value || 'p1', start, end, note: q('g_note').value.trim(), u: Date.now() });
+  famSave(); $('dlg').close(); render(); toast('Garde enregistrée');
+}
+function openAlternate() {
+  showDialog(`<h2>Semaines alternées</h2>
+    <p class="muted">Crée une semaine sur deux chez chaque parent. Le jour de début est le jour du changement (par exemple un vendredi).</p>
+    <div class="field"><span class="lbl">La première semaine, chez</span>${radios('al_first', [['p1', parentName('p1')], ['p2', parentName('p2')]], 'p1')}</div>
+    <div class="two">${field('À partir du', `<input type="date" name="al_start" value="${todayISO()}">`)}${field('Jusqu\u2019au', `<input type="date" name="al_end" value="${addDays(todayISO(), 180)}">`)}</div>
+    <div class="btns end"><button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveAlternate">Créer</button></div>`);
+}
+function saveAlternate() {
+  const q = k => document.querySelector(`[name=${k}]`), start = q('al_start').value, end = q('al_end').value;
+  if (!start || !end || end < start) return toast('Vérifiez les dates.');
+  const series = 's' + uid(); let w = (document.querySelector('[name=al_first]:checked') || {}).value || 'p1', k = 0;
+  for (let s = start; s <= end; s = addDays(s, 7)) {
+    const e = addDays(s, 6) < end ? addDays(s, 6) : end;
+    FY.garde.push({ id: 'g' + uid() + k++, with: w, start: s, end: e, series, u: Date.now() });
+    w = w === 'p1' ? 'p2' : 'p1';
+  }
+  famSave(); $('dlg').close(); render(); toast(`${k} semaines créées`);
+}
+
+/* ----- Rendez-vous et activités famille ----- */
+// Dates d'un rendez-vous (ou d'une activité hebdomadaire) entre deux dates incluses.
+function famOccurrences(a, from, to) {
+  if (!a.date) return [];
+  if (a.repeat !== 'weekly') return a.date >= from && a.date <= to ? [a.date] : [];
+  const out = []; let d = a.date;
+  if (d < from) d = addDays(d, 7 * Math.ceil(daysBetween(d, from) / 7));
+  for (; d <= to && (!a.until || d <= a.until); d = addDays(d, 7)) out.push(d);
+  return out;
+}
+const famApptsOn = s => FY.appts.filter(a => famOccurrences(a, s, s).length);
+const nextOcc = a => famOccurrences(a, todayISO(), addDays(todayISO(), 400))[0] || null;
+const RIDES = { p1: '', p2: '', seule: 'Seule / à pied', bus: 'Bus / train' };
+const rideText = r => (!r ? '' : r === 'p1' || r === 'p2' ? `${FY.parents[r]} emmène` : RIDES[r] || '');
+const DOWL = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+
+const famWho = a => (Array.isArray(a.who) ? a.who : []);
+function famApptCard(a) {
+  const rems = (a.reminders || []).map(remText).join(', ');
+  const warn = !famOnly() && SY.me && famWho(a).includes(FSY.me) && a.date && isWorkday(SY.me, a.date) && offFrac(SY.me, a.date, buildIdx()) < 1;
+  const nx = a.repeat === 'weekly' ? nextOcc(a) : null;
+  return `<section class="card appt"><div class="trip-h"><div class="grow"><h2>${a.repeat === 'weekly' ? '🔁' : '📌'} ${esc(a.title)} ${famOnly() ? '' : '<span class="famtag">Famille</span>'}</h2>
+    <div class="muted">${a.repeat === 'weekly' ? `Chaque ${DOWL[dow(a.date)]}${a.time ? ` à ${a.time}${a.end ? `–${a.end}` : ''}` : ''}${nx ? ` · prochaine fois ${short(nx)}` : ' · terminé'}` : `${a.date ? frDate(a.date) : 'date à définir'}${a.time ? ` à ${a.time}${a.end ? `–${a.end}` : ''}` : ''}`}${a.place ? `<br>📍 ${esc(a.place)}` : ''}</div>
+    ${a.ride ? `<div class="ride">🚗 ${esc(rideText(a.ride))}</div>` : ''}
+    <div class="who-l">${famWho(a).map(id => `<span class="fchip">${esc(famName(id))}</span>`).join('')}</div>
+    ${warn ? `<div class="warn">⚠ Tu travailles ce jour-là : pense à poser un congé.</div>` : ''}
+    <div class="muted">🔔 ${rems || 'aucun rappel'}</div></div>
+    <button class="iconbtn" data-act="editAppt" data-id="${a.id}" aria-label="Modifier le rendez-vous">✎</button></div>
+    ${a.notes ? `<p class="tnotes">${esc(a.notes)}</p>` : ''}
+    <div class="btns">${a.date ? `<a class="btn sm" href="${apptGcal(a)}" target="_blank" rel="noopener">Google Agenda</a><button class="btn sm" data-act="apptIcs" data-id="${a.id}">Agenda iPhone (.ics)</button>` : ''}</div></section>`;
+}
+function famRequests() {
+  const req = FY.garde.filter(g => g.status === 'demande').sort((a, b) => a.start.localeCompare(b.start));
+  if (!req.length) return '';
+  const adult = famAdult();
+  return `<section class="card pend"><div class="pendh"><h2>${adult ? 'Demandes de garde' : 'Mes demandes'}</h2></div>
+    ${req.map(g => `<div class="pendrow"><span class="gdot g-${g.with}"></span><div class="grow"><b>Chez ${parentName(g.with)}</b><small>${esc(famName(g.by) || '?')} · du ${short(g.start)} au ${short(g.end || g.start)}${g.note ? ' · ' + esc(g.note) : ''}</small></div>
+      ${adult ? `<button type="button" class="vbtn" data-act="gReqOk" data-id="${g.id}">Accepter</button><button type="button" class="iconbtn" data-act="gReqNo" data-id="${g.id}" aria-label="Refuser">✕</button>` : `<span class="waitlbl">en attente</span><button type="button" class="iconbtn" data-act="gReqNo" data-id="${g.id}" aria-label="Annuler la demande">✕</button>`}</div>`).join('')}</section>`;
+}
+function openGardeRequest() {
+  showDialog(`<h2>Demander un changement</h2>
+    <p class="muted">Ta demande est envoyée aux adultes, qui l\u2019acceptent ou non.</p>
+    <div class="field"><span class="lbl">Je voudrais être chez</span>${radios('gr_with', [['p1', parentName('p1')], ['p2', parentName('p2')]], 'p1')}</div>
+    <div class="two">${field('Du', `<input type="date" name="gr_start" value="${todayISO()}">`)}${field('Au (inclus)', `<input type="date" name="gr_end" value="${todayISO()}">`)}</div>
+    ${field('Pourquoi (optionnel)', '<input name="gr_note" placeholder="ex. anniversaire de Zoé samedi">')}
+    <div class="btns end"><button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveGReq">Envoyer la demande</button></div>`);
+}
+function packList(kidId) {
+  const items = FY.items.filter(i => i.who === kidId);
+  const me = famOnly() && kidId === FSY.me;
+  return `<section class="card"><h2>🎒 À emporter${me ? '' : ' · ' + esc(famName(kidId))}</h2>
+    <p class="muted">Rappelé la veille de chaque changement de maison.</p>
+    ${items.map(i => `<div class="entry"><div class="grow">${esc(i.text)}</div><button class="iconbtn" data-act="delItemPack" data-id="${i.id}" aria-label="Retirer">✕</button></div>`).join('') || '<p class="muted">Rien pour l\u2019instant.</p>'}
+    <div class="two" style="grid-template-columns:minmax(0,1fr) auto;align-items:end">${field('Ajouter', `<input name="pk_text" data-kid="${kidId}" placeholder="ex. sac de sport, chargeur">`)}<button class="btn" data-act="addPack" data-kid="${kidId}" style="margin-bottom:10px">+</button></div></section>`;
+}
+function gardeSection() {
+  const t = todayISO(), list = FY.garde.filter(g => g.status !== 'demande' && (g.end || g.start) >= t).sort((a, b) => a.start.localeCompare(b.start)).slice(0, 12);
+  return `<h3 class="sec">Garde</h3>${gardeCard()}${famRequests()}
+    ${famAdult() ? `<div class="btns"><button class="btn sm pri" data-act="newGarde">+ Période</button><button class="btn sm" data-act="newAlternate">+ Semaines alternées</button></div>` : '<div class="btns"><button class="btn sm pri" data-act="gReq">Demander un changement</button></div>'}
+    ${list.length ? `<section class="card list">${list.map(g => `<div class="entry"><span class="gdot g-${g.with}"></span><div class="grow"><b>Chez ${parentName(g.with)}</b> <small class="muted">du ${short(g.start)} au ${short(g.end || g.start)}</small>${g.note ? `<br><small>${esc(g.note)}</small>` : ''}</div>
+      ${famAdult() ? `<button class="iconbtn" data-act="editGarde" data-id="${g.id}" aria-label="Modifier">✎</button>` : ''}</div>`).join('')}</section>` : ''}`;
+}
+
+/* ----- Écrans du mode famille (téléphone de l'enfant ou de l'autre parent) ----- */
+function renderFamHome() {
+  if (S.invite && !isStandalone()) return inviteGuide();
+  const t = todayISO(), me = famMe(), kid = me && me.role === 'enfant';
+  let h = (S.invite ? '' : iosHint());
+  h += `<header class="hello"><span class="muted">${longDate(t)}</span><h2>Bonjour ${esc(me ? me.name : '')}</h2></header>`;
+  h += homeSetup() + gardeCard() + famRequests();
+  if (kid) h += '<div class="btns"><button class="btn pri" data-act="gReq">Demander un changement de garde</button></div>';
+  const week = [];
+  for (let i = 0; i < 7; i++) { const d = addDays(t, i); famApptsOn(d).forEach(a => week.push({ a, d })); }
+  week.sort((x, y) => (x.d + (x.a.time || '')).localeCompare(y.d + (y.a.time || '')));
+  h += `<h3 class="sec">Ces 7 prochains jours</h3>` + (week.length ? `<section class="card list">${week.map(({ a, d }) => `<button type="button" class="entry rowbtn" data-act="editAppt" data-id="${a.id}"><span>${a.repeat === 'weekly' ? '🔁' : '📌'}</span><div class="grow"><b>${esc(a.title)}</b><br><small class="muted">${short(d)}${a.time ? ' à ' + a.time : ''}${a.ride ? ' · 🚗 ' + esc(rideText(a.ride)) : ''}</small></div></button>`).join('')}</section>` : '<p class="muted">Rien de prévu.</p>');
+  if (kid) h += packList(me.id);
+  return h;
+}
+function renderFamCal() {
+  const y = S.year, m = S.calM, t = todayISO(), first = iso(y, m, 1), offset = (dow(first) + 6) % 7, dim = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  let g = `<div class="monthbar"><button class="iconbtn" data-act="month" data-d="-1" aria-label="Mois précédent">‹</button><strong>${MONTHS[m - 1]} ${y}</strong><button class="iconbtn" data-act="month" data-d="1" aria-label="Mois suivant">›</button></div>
+    <div class="who"><span><span class="gdot g-p1"></span>chez ${parentName('p1')}</span><span><span class="gdot g-p2"></span>chez ${parentName('p2')}</span><span>📌 rendez-vous</span></div>
+    <div class="grid">${['lu', 'ma', 'me', 'je', 've', 'sa', 'di'].map(d => `<div class="dow">${d}</div>`).join('')}`;
+  for (let i = 0; i < offset; i++) g += '<div class="day empty"></div>';
+  for (let d = 1; d <= dim; d++) {
+    const s = iso(y, m, d), gd = gardeAt(s), ap = famApptsOn(s).length > 0, hol = holidayName(s);
+    g += `<button class="day${hol ? ' hol' : ''}${s === t ? ' today' : ''}" data-act="famDay" data-d="${s}"><span class="num">${d}${ap ? '<small class="mk">📌</small>' : ''}</span>
+      <span class="lane"><i class="h ${gd ? 'g-' + gd.with + 'bg' : ''}"></i></span></button>`;
+  }
+  return g + '</div>';
+}
+function openFamDay(s) {
+  const gd = gardeAt(s), ap = famApptsOn(s);
+  showDialog(`<h2>${frDate(s)}</h2>${holidayName(s) ? `<p class="holname">${esc(holidayName(s))}</p>` : ''}
+    <p>${gd ? `<span class="gdot g-${gd.with}"></span> Chez <b>${parentName(gd.with)}</b>${gd.note ? ' · ' + esc(gd.note) : ''}` : '<span class="muted">Pas de garde notée</span>'}</p>
+    ${ap.map(a => `<div class="entry"><div class="grow">${a.repeat === 'weekly' ? '🔁' : '📌'} <b>${esc(a.title)}</b>${a.time ? ` à ${a.time}` : ''}${a.ride ? `<br><small class="muted">🚗 ${esc(rideText(a.ride))}</small>` : ''}</div><button class="iconbtn" data-act="editAppt" data-id="${a.id}" aria-label="Modifier">✎</button></div>`).join('')}
+    <div class="btns end"><button class="btn" data-act="close">Fermer</button><button class="btn pri" data-act="newAppt" data-date="${s}">+ Rendez-vous</button></div>`);
+}
+function renderFamAgenda() {
+  const t = todayISO();
+  const acts = FY.appts.filter(a => a.repeat === 'weekly' && (!a.until || a.until >= t)).sort((a, b) => (dow(a.date) + (a.time || '')).localeCompare(dow(b.date) + (b.time || '')));
+  const up = FY.appts.filter(a => a.repeat !== 'weekly' && (!a.date || a.date >= t)).sort((a, b) => ((a.date || '9') + (a.time || '')).localeCompare((b.date || '9') + (b.time || '')));
+  return `<div class="btns"><button class="btn pri" data-act="newAppt">+ Rendez-vous</button><button class="btn" data-act="newActivity">+ Activité</button></div>${gardeSection()}
+    ${acts.length ? `<h3 class="sec">Activités chaque semaine</h3>${acts.map(famApptCard).join('')}` : ''}
+    <h3 class="sec">Rendez-vous</h3>${up.length ? up.map(famApptCard).join('') : '<p class="muted">Aucun rendez-vous à venir.</p>'}
+    ${famOnly() && famMe() && famMe().role === 'enfant' ? '' : FY.members.filter(m => m.role === 'enfant').map(m => packList(m.id)).join('')}`;
+}
+function renderFamMore() {
+  const me = famMe();
+  return `<h2 class="pagetitle">Réglages</h2>
+    <section class="card"><p>Ce téléphone est celui de <b>${esc(me ? me.name : '?')}</b>.</p>
+    <div class="row"><span>Notifications</span><b>${famPushOk() ? 'activées' : 'non activées'}</b></div>
+    <div class="btns"><button class="btn sm pri" data-act="famPushOn">Activer les notifications</button></div></section>
+    <section class="card"><h2>Sauvegarde</h2><p class="syncline">${FSY.error ? esc(FSY.error) : FSY.dirty ? 'Modifications en attente d\u2019envoi.' : 'À jour.'}</p>
+    <div class="btns"><button class="btn pri" data-act="sync">Synchroniser maintenant</button></div>
+    <p class="muted">Effacer ne touche qu\u2019à ce téléphone.</p><div class="btns"><button class="btn danger" data-act="famReset">Effacer ce téléphone</button></div></section>
+    <p class="muted center">Version de l\u2019app : ${APP_VERSION}</p>`;
+}
+
+/* ----- Réglages « Espace famille » (adulte principal) ----- */
+function famSettings() {
+  if (!isAdmin()) return '';
+  if (!famOn()) return sect('famille', '<span class="grow">Espace famille (ado, garde)</span>', `
+    <p class="muted">Un espace séparé, dans un autre repo privé, pour partager la garde et des rendez-vous avec ton ado (et éventuellement son autre parent). Ils ne voient <b>que</b> cet espace : jamais vos congés, vos heures sup ni vos autres rendez-vous.</p>
+    <div class="two">${field('Compte GitHub', `<input data-fsync="owner" autocapitalize="off" spellcheck="false" value="${esc(FSY.owner || SY.owner)}">`)}${field('Repo privé famille', `<input data-fsync="repo" autocapitalize="off" spellcheck="false" value="${esc(FSY.repo)}">`)}</div>
+    ${field('Clé d\u2019accès famille (uniquement ce repo)', `<input type="password" data-fsync="token" autocomplete="off" placeholder="github_pat_…" value="">`)}
+    <div class="btns"><button class="btn pri" data-act="famConnect">Connecter l\u2019espace famille</button></div>`);
+  const subs = Object.entries(FY.subs).filter(([, v]) => v && v.sub);
+  return sect('famille', '<span class="grow">Espace famille</span>', `
+    <p class="syncline">${FSY.error ? esc(FSY.error) : FSY.dirty ? 'Modifications en attente d\u2019envoi.' : 'Synchronisé.'} · ${esc(FSY.repo)}</p>
+    <h4>Membres</h4>
+    ${FY.members.map(m => `<div class="row"><span>${esc(m.name)} <small class="muted">${m.role}${m.id === FSY.me ? ' · toi' : ''}</small></span><b>${m.id !== FSY.me ? `<button class="btn sm" data-act="famInvite" data-id="${m.id}">Inviter</button> <button class="btn sm danger" data-act="famDelMember" data-id="${m.id}">Retirer</button>` : ''}</b></div>`).join('')}
+    <div class="two">${field('Prénom', '<input name="fm_name" placeholder="ex. le prénom de ta fille">')}${field('Rôle', '<select name="fm_role"><option value="enfant">enfant / ado</option><option value="adulte">adulte</option></select>')}</div>
+    <div class="btns"><button class="btn sm" data-act="famAddMember">+ Ajouter ce membre</button></div>
+    <h4>Garde : noms des deux foyers</h4>
+    <div class="two">${field('Foyer 1', `<input data-fpar="p1" value="${esc(FY.parents.p1)}">`)}${field('Foyer 2', `<input data-fpar="p2" value="${esc(FY.parents.p2)}">`)}</div>
+    <h4>Notifications famille sur ce téléphone</h4>
+    <div class="row"><span>Ce téléphone</span><b>${famPushOk() ? 'activé' : 'non activé'}</b></div>
+    ${subs.map(([k, v]) => `<div class="row"><span>${esc(v.name || '')}</span><b>${esc(famName(v.person))}</b></div>`).join('')}
+    <div class="btns"><button class="btn sm pri" data-act="famPushOn">Recevoir les rappels famille ici</button></div>
+    <div class="btns"><button class="btn sm danger" data-act="famDisconnect">Déconnecter l\u2019espace famille de ce téléphone</button></div>`);
+}
+function famInvite(id) {
+  const m = FY.members.find(x => x.id === id); if (!m) return;
+  const code = 'CDF1.' + b64u(new TextEncoder().encode(JSON.stringify({ o: FSY.owner, r: FSY.repo, p: FSY.path, t: FSY.token, me: m.id, dev: m.name })));
+  const link = location.origin + location.pathname.replace(/index\.html$/, '') + '#invite=' + code;
+  showDialog(`<h2>Invitation pour ${esc(m.name)}</h2>
+    <p class="muted">Ce lien donne accès <b>uniquement</b> à l\u2019espace famille. Envoyez-le en privé, puis supprimez le message.</p>
+    <textarea readonly rows="4" id="inv">${link}</textarea>
+    <div class="btns">${navigator.share ? '<button class="btn sm pri" data-act="shareInv">Envoyer le lien…</button>' : ''}<button class="btn sm" data-act="copy" data-src="inv">Copier le lien</button></div>
+    <div class="btns end"><button class="btn" data-act="close">Fermer</button></div>`);
+}
+const famPushOk = () => !!(FY.push && FY.push.publicKey && SY.deviceId && FY.subs[SY.deviceId] && FY.subs[SY.deviceId].sub && typeof Notification !== 'undefined' && Notification.permission === 'granted');
+async function famEnablePush() {
+  if (isIOS() && !isStandalone()) return toast('Installez d\u2019abord l\u2019app : Safari › Partager › « Sur l\u2019écran d\u2019accueil ».');
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined') return toast('Ce téléphone ne gère pas les notifications.');
+  if (!FY.push || !FY.push.publicKey) return toast('Les notifications famille ne sont pas encore prêtes (à activer par l\u2019adulte principal).');
+  try {
+    if (await Notification.requestPermission() !== 'granted') return toast('Notifications refusées : autorisez-les dans les réglages du téléphone.');
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && SY.pushKey && SY.pushKey !== FY.push.publicKey) { await sub.unsubscribe(); sub = null; }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: ub64u(FY.push.publicKey) });
+    SY.deviceId = SY.deviceId || uid(); SY.pushKey = FY.push.publicKey; saveSync();
+    FY.subs[SY.deviceId] = { person: FSY.me, name: famName(FSY.me), sub: sub.toJSON(), u: Date.now() };
+    famSave(); render(); toast('Notifications famille activées');
+  } catch (err) { toast('Activation impossible : ' + (err && err.message ? err.message : 'erreur')); }
+}
+
 /* ----- Fenêtre de saisie ----- */
 function dayStateText(p, s) {
   const k = baseKind(p, s);
@@ -1245,7 +1600,8 @@ function openDay(s) {
   showDialog(`<h2>${frDate(s)}</h2>${hol ? `<p class="holname">${esc(hol)}</p>` : ''}
     <p class="muted">${P.map(p => `${nm(p)} : ${dayStateText(p, s)}`).join('<br>')}</p>
     ${list ? `<div class="existing">${list}</div>` : ''}
-    ${(DB.appts || []).filter(x => x.date === s).map(x => `<div class="entry"><div class="grow">📌 <b>${esc(x.title)}</b>${x.time ? ` à ${x.time}` : ''}</div><button class="iconbtn" data-act="editAppt" data-id="${x.id}" aria-label="Modifier">✎</button></div>`).join('')}
+    ${famOn() && gardeAt(s) ? `<p><span class="gdot g-${gardeAt(s).with}"></span> Garde : chez <b>${parentName(gardeAt(s).with)}</b>${gardeAt(s).note ? ' · ' + esc(gardeAt(s).note) : ''}</p>` : ''}
+    ${(DB.appts || []).filter(x => x.date === s).concat(famOn() ? famApptsOn(s) : []).map(x => `<div class="entry"><div class="grow">📌 <b>${esc(x.title)}</b>${x.time ? ` à ${x.time}` : ''}</div><button class="iconbtn" data-act="editAppt" data-id="${x.id}" aria-label="Modifier">✎</button></div>`).join('')}
     ${P.filter(p => DB.persons[p].sched.enabled && isWorkday(p, s)).map(p => `<button class="btn sm ${pc(p)}" data-act="hours" data-p="${p}" data-d="${s}">⏱ Horaires de ${nm(p)}</button>`).join(' ')}
     <h3>Nouvelle saisie</h3>${entryForm({ date: s, person: S.addWho || SY.me || 'both', type: 'conge', part: 'full' }, false)}
     <div class="btns end"><button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveAdd">Enregistrer</button></div>`);
@@ -1380,10 +1736,10 @@ function b64enc(str) { const bytes = new TextEncoder().encode(str); let bin = ''
 function b64dec(b64) { const bin = atob(String(b64).replace(/\s/g, '')); return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0))); }
 const repoUrl = () => `/repos/${encodeURIComponent(SY.owner)}/${encodeURIComponent(SY.repo)}`;
 const fileUrl = () => `${repoUrl()}/contents/${SY.path.split('/').map(encodeURIComponent).join('/')}`;
-async function gh(method, url, body) {
+async function gh(method, url, body, token) {
   const res = await fetch('https://api.github.com' + url, {
     method, cache: 'no-store',
-    headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${SY.token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token || SY.token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   let data = null;
@@ -1446,7 +1802,7 @@ function syncText() {
 function setSyncState(state) {
   if (state) syncState = state;
   if (typeof document === 'undefined') return;
-  const st = !syncOn() ? 'off' : syncState === 'busy' ? 'busy' : SY.error ? (syncState === 'offline' ? 'wait' : 'err') : SY.dirty ? 'wait' : 'ok';
+  const st = !syncOn() ? (famOn() ? (FSY.error ? 'err' : FSY.dirty ? 'wait' : 'ok') : 'off') : syncState === 'busy' ? 'busy' : SY.error ? (syncState === 'offline' ? 'wait' : 'err') : SY.dirty ? 'wait' : 'ok';
   const dot = $('syncDot');
   if (dot) { dot.className = 'syncdot s-' + st; dot.title = syncText(); }
   const line = $('syncStatus');
@@ -1465,6 +1821,11 @@ function onClick(ev) {
     render();
   }
   else if (a === 'day') openDay(b.dataset.d);
+  else if (a === 'add' && famOnly()) {
+    const tile = (act, icon, title, sub) => `<button type="button" class="tile" data-act="${act}">${icon}<b>${title}</b><small>${sub}</small></button>`;
+    showDialog(`<h2>Ajouter</h2><div class="tiles">${tile('newAppt', ICON.pin.replace(/20/g, '24'), 'Rendez-vous', 'une fois')}${tile('newActivity', ICON.clock, 'Activité', 'chaque semaine')}${famAdult() ? tile('newGarde', ICON.list, 'Garde', 'période chez un parent') : tile('gReq', ICON.list, 'Changement', 'demander à être chez…')}${tile('tab', ICON.beach, 'À emporter', 'ma liste')}</div>`);
+    const last = document.querySelector('#dlgBody .tile:last-child'); if (last) last.dataset.v = 'home';
+  }
   else if (a === 'add') openAdd();
   else if (a === 'addWho') { S.addWho = b.dataset.v; openAdd(); }
   else if (a === 'addHours') { const p = S.addWho && S.addWho !== 'both' ? S.addWho : (SY.me || 'a'); openHours(p, todayISO()); }
@@ -1508,10 +1869,12 @@ function onClick(ev) {
   }
   else if (a === 'editTrip') openTrip(b.dataset.id);
   else if (a === 'newTrip') openTrip();
-  else if (a === 'newAppt') openAppt();
+  else if (a === 'newAppt') openAppt(undefined, b.dataset.date);
   else if (a === 'editAppt') openAppt(b.dataset.id);
   else if (a === 'saveAppt') saveAppt(b.dataset.id);
   else if (a === 'delAppt') {
+    const fx = FY.appts.find(y => y.id === b.dataset.id);
+    if (fx) { if (!confirm(`Supprimer le rendez-vous « ${fx.title} » de l\u2019espace famille ?`)) return; FY.appts = FY.appts.filter(y => y.id !== fx.id); FY.deleted[fx.id] = Date.now(); famSave(); $('dlg').close(); render(); toast('Rendez-vous supprimé'); return; }
     const x = (DB.appts || []).find(y => y.id === b.dataset.id); if (!x) return;
     $('dlg').close();
     undoable(`Rendez-vous « ${x.title} » supprimé`, () => { DB.appts = DB.appts.filter(y => y.id !== x.id); DB.deleted[x.id] = Date.now(); });
@@ -1531,6 +1894,66 @@ function onClick(ev) {
   else if (a === 'pasteJoin') { (navigator.clipboard && navigator.clipboard.readText ? navigator.clipboard.readText() : Promise.reject()).then(t => { $('joinCode').value = t; joinWithCode(); }, () => toast('Collez le code à la main dans le champ (appui long › Coller).')); }
   else if (a === 'copy') { const el = $(b.dataset.src); if (el) { (navigator.clipboard ? navigator.clipboard.writeText(el.value) : Promise.reject()).then(() => toast('Copié'), () => { el.select(); document.execCommand('copy'); toast('Copié'); }); } }
   else if (a === 'join') joinWithCode();
+  else if (a === 'famConnect') {
+    document.querySelectorAll('[data-fsync]').forEach(i => { if (i.value.trim()) FSY[i.dataset.fsync] = i.value.trim(); }); famSaveSync();
+    if (!FSY.token) return toast('Collez la clé d\u2019accès famille.'); famConnect();
+  }
+  else if (a === 'famInvite') famInvite(b.dataset.id);
+  else if (a === 'famAddMember') {
+    const nmv = (document.querySelector('[name=fm_name]') || {}).value || '', role = (document.querySelector('[name=fm_role]') || {}).value || 'enfant';
+    if (!nmv.trim()) return toast('Indiquez un prénom.');
+    FY.members.push({ id: 'm' + uid(), name: nmv.trim(), role, u: Date.now() }); FY.su = Date.now(); famSave(); render(); toast(`${nmv.trim()} ajouté(e)`);
+  }
+  else if (a === 'famDelMember') {
+    const m = FY.members.find(x => x.id === b.dataset.id); if (!m) return;
+    if (!confirm(`Retirer ${m.name} de l\u2019espace famille ? Pour lui couper l\u2019accès, il faudra aussi changer la clé famille.`)) return;
+    FY.members = FY.members.filter(x => x.id !== m.id); FY.su = Date.now(); famSave(); render();
+  }
+  else if (a === 'famPushOn') famEnablePush();
+  else if (a === 'famDisconnect') {
+    if (!confirm('Déconnecter l\u2019espace famille de ce téléphone ? Les données restent dans le repo famille.')) return;
+    FSY = { ...FSY, token: '', famOnly: false, error: '' }; famSaveSync(); FY = famDefault(); famSaveLocal(); render();
+  }
+  else if (a === 'famReset') {
+    if (!confirm('Effacer les données de ce téléphone ?') || !confirm('Confirmer ? Il faudra le lien d\u2019invitation pour revenir.')) return;
+    FSY = { owner: '', repo: 'conges-duo-famille', path: 'donnees.json', token: '', me: '', lastSync: '', dirty: false, error: '', famOnly: false }; famSaveSync(); FY = famDefault(); famSaveLocal(); render();
+  }
+  else if (a === 'famAppt') { S.famNew = true; openAppt(); }
+  else if (a === 'newActivity') { S.famNew = true; S.famRepeat = true; openAppt(); }
+  else if (a === 'gReq') openGardeRequest();
+  else if (a === 'saveGReq') {
+    const q = k => document.querySelector(`[name=${k}]`), start = q('gr_start').value, end = q('gr_end').value || start;
+    if (!start || end < start) return toast('Vérifiez les dates.');
+    FY.garde.push({ id: 'g' + uid(), with: (document.querySelector('[name=gr_with]:checked') || {}).value || 'p1', start, end, note: q('gr_note').value.trim(), status: 'demande', by: FSY.me, u: Date.now() });
+    famSave(); $('dlg').close(); render(); toast('Demande envoyée');
+  }
+  else if (a === 'gReqOk') {
+    const g = FY.garde.find(x => x.id === b.dataset.id); if (!g || !famAdult()) return;
+    delete g.status; g.u = Date.now(); famSave(); render(); toast('Changement accepté');
+  }
+  else if (a === 'gReqNo') {
+    const g = FY.garde.find(x => x.id === b.dataset.id); if (!g) return;
+    FY.garde = FY.garde.filter(x => x.id !== g.id); FY.deleted[g.id] = Date.now(); famSave(); render(); toast(famAdult() ? 'Demande refusée' : 'Demande annulée');
+  }
+  else if (a === 'addPack') {
+    const el = document.querySelector(`[name=pk_text][data-kid="${b.dataset.kid}"]`), v = el ? el.value.trim() : '';
+    if (!v) return; FY.items.push({ id: 'i' + uid(), who: b.dataset.kid, text: v, u: Date.now() }); famSave(); render();
+  }
+  else if (a === 'delItemPack') { FY.items = FY.items.filter(x => x.id !== b.dataset.id); FY.deleted[b.dataset.id] = Date.now(); famSave(); render(); }
+  else if (a === 'famDay') openFamDay(b.dataset.d);
+  else if (a === 'newGarde') openGarde();
+  else if (a === 'editGarde') openGarde(b.dataset.id);
+  else if (a === 'saveGarde') saveGarde(b.dataset.id);
+  else if (a === 'delGarde') {
+    const g = FY.garde.find(x => x.id === b.dataset.id); if (!g) return;
+    const serie = g.series ? FY.garde.filter(x => x.series === g.series) : [g];
+    const all = serie.length > 1 && confirm(`Supprimer toute la série de semaines alternées (${serie.length} périodes) ? Annuler = seulement cette période.`);
+    (all ? serie : [g]).forEach(x => { FY.deleted[x.id] = Date.now(); });
+    const ids = new Set((all ? serie : [g]).map(x => x.id)); FY.garde = FY.garde.filter(x => !ids.has(x.id));
+    famSave(); $('dlg').close(); render(); toast('Garde supprimée');
+  }
+  else if (a === 'newAlternate') openAlternate();
+  else if (a === 'saveAlternate') saveAlternate();
   else if (a === 'period') openPeriod(b.dataset.id);
   else if (a === 'perSave') periodSave(b.dataset.id);
   else if (a === 'perValidate') {
@@ -1580,7 +2003,7 @@ function onClick(ev) {
   else if (a === 'export') { download(`conges-duo-${todayISO()}.json`, JSON.stringify(DB, null, 1), 'application/json'); toast('Sauvegarde exportée'); }
   else if (a === 'import') $('importFile').click();
   else if (a === 'csv') exportCSV();
-  else if (a === 'sync') { if (syncOn()) syncNow(true); else { S.view = 'set'; render(); toast('Configurez la sauvegarde GitHub en bas des réglages.'); } }
+  else if (a === 'sync') { if (syncOn()) syncNow(true); if (famOn()) famSync(true); if (!syncOn() && !famOn()) { S.view = 'set'; render(); toast('Configurez la sauvegarde GitHub en bas des réglages.'); } }
   else if (a === 'forget') {
     if (!confirm('Retirer la clé GitHub de ce téléphone ? La synchro s\u2019arrête ici. Vos données restent sur ce téléphone et dans le repo privé.')) return;
     if (!confirm('Confirmer : retirer la clé ? Il faudra la recoller pour resynchroniser.')) return;
@@ -1617,6 +2040,12 @@ function onChange(ev) {
     render(); toast(`Ce téléphone est celui de ${DB.persons[SY.me].name}`);
   } else if (t.id === 'importFile') {
     if (t.files[0]) importFile(t.files[0]); t.value = '';
+  } else if (t.dataset.fsync) { FSY[t.dataset.fsync] = t.value.trim(); famSaveSync();
+  } else if (t.dataset.fpar) { FY.parents[t.dataset.fpar] = t.value.trim() || FY.parents[t.dataset.fpar]; FY.su = Date.now(); famSave();
+  } else if (t.dataset.reptoggle) { const u = document.querySelector('[data-row=until]'); if (u) u.hidden = !t.checked;
+  } else if (t.dataset.famtoggle) {
+    const on = t.checked, mw = document.querySelector('[data-row=mainwho]'), fw = document.querySelector('[data-row=famwho]');
+    if (mw) mw.hidden = on; if (fw) fw.hidden = !on;
   } else if (t.dataset.hdate) { if (t.value) openHours(t.dataset.hdate, t.value);
   } else if (t.name === 'f_type') { syncForm(); leavePreview(); }
   else if (t.name && t.name.startsWith('f_')) leavePreview();
@@ -1629,11 +2058,12 @@ function autoPris() {
 function init() {
   load();
   loadSync();
+  famLoad();
   autoPris();
-  const inv = (location.hash.match(/invite=(CD1\.[A-Za-z0-9_-]+)/) || [])[1];
+  const inv = (location.hash.match(/invite=(CDF?1\.[A-Za-z0-9_-]+)/) || [])[1];
   if (inv) {
     history.replaceState(null, '', location.pathname + location.search);
-    if (isStandalone() && !syncOn()) setTimeout(() => { const el = $('joinCode'); if (el) { el.value = inv; joinWithCode(); } }, 0);
+    if (isStandalone() && !syncOn() && !famOn()) setTimeout(() => { const el = $('joinCode'); if (el) { el.value = inv; joinWithCode(); } }, 0);
     else if (!isStandalone()) S.invite = inv;
   }
   document.addEventListener('click', onClick);
@@ -1653,14 +2083,16 @@ function init() {
   scheduleSync(600);
   dstNotify();
   window.addEventListener('online', () => scheduleSync(300));
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { scheduleSync(300); loadLastNotif(); } });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { scheduleSync(300); famSchedule(500); loadLastNotif(); } });
+  window.addEventListener('online', () => famSchedule(500));
+  famSchedule(900);
   loadLastNotif();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { nextTogether, pendingGroups, apptTimes, periodOf, safeUrl, remText, recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
+  module.exports = { famOccurrences, famMerge, gardeAt, gardeRuns, getFY: () => FY, setFY: d => { FY = famMigrate(d); }, nextTogether, pendingGroups, apptTimes, periodOf, safeUrl, remText, recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
     getDB: () => DB, setDB: d => { DB = migrate(d); } };
 }
 if (typeof document !== 'undefined') init();
