@@ -4,7 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'congesDuo.v1';
-const APP_VERSION = '2026-10-21 n°9';
+const APP_VERSION = '2026-10-23 n°10';
 const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
@@ -908,16 +908,22 @@ function saveAppt(id) {
   const w = apptWarn(a); toast(w.length ? `Enregistré. Attention : ${w.join(', ')}.` : 'Rendez-vous enregistré');
 }
 const ymd = s => s.replace(/-/g, '');
+// Heure par défaut 9 h et durée 1 h quand rien n'est saisi.
+function apptTimes(a) {
+  const st = a.time || '09:00';
+  let en = a.end;
+  if (!en || en <= st) { const m = tmin(st) + 60; en = `${pad(Math.min(23, Math.floor(m / 60)))}:${pad(m >= 1440 ? 59 : m % 60)}`; }
+  return { st: st.replace(':', '') + '00', en: en.replace(':', '') + '00' };
+}
 function apptGcal(a) {
   const d = ymd(a.date);
-  const dates = a.time ? `${d}T${a.time.replace(':', '')}00/${d}T${(a.end || a.time).replace(':', '')}00` : `${d}/${ymd(addDays(a.date, 1))}`;
+  const t = apptTimes(a), dates = `${d}T${t.st}/${d}T${t.en}`;
   return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(a.title)}&dates=${dates}&ctz=Europe/Zurich&location=${encodeURIComponent(a.place || '')}&details=${encodeURIComponent(a.notes || '')}`;
 }
 function apptIcs(id) {
   const a = (DB.appts || []).find(x => x.id === id); if (!a || !a.date) return;
   const d = ymd(a.date), clean = s => String(s || '').replace(/[\\;,]/g, m => '\\' + m).replace(/\n/g, '\\n');
-  const start = a.time ? `DTSTART:${d}T${a.time.replace(':', '')}00` : `DTSTART;VALUE=DATE:${d}`;
-  const end = a.time ? `DTEND:${d}T${(a.end || a.time).replace(':', '')}00` : `DTEND;VALUE=DATE:${ymd(addDays(a.date, 1))}`;
+  const t = apptTimes(a), start = `DTSTART:${d}T${t.st}`, end = `DTEND:${d}T${t.en}`;
   const alarms = (a.reminders || []).map(r => ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${clean(a.title)}`,
     `TRIGGER:-P${r.u === 'd' ? `${r.n}D` : `T${r.n}${r.u === 'h' ? 'H' : 'M'}`}`, 'END:VALARM'].join('\r\n'));
   download(`rendez-vous-${d}.ics`, ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Conges Duo//FR', 'BEGIN:VEVENT', `UID:${a.id}@conges-duo`,
@@ -1524,7 +1530,7 @@ function init() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { periodOf, safeUrl, remText, recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
+  module.exports = { apptTimes, periodOf, safeUrl, remText, recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
     getDB: () => DB, setDB: d => { DB = migrate(d); } };
 }
 if (typeof document !== 'undefined') init();
