@@ -4,7 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'congesDuo.v1';
-const APP_VERSION = '2026-10-23 n°11';
+const APP_VERSION = '2026-10-23 n°12';
 const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
@@ -309,18 +309,32 @@ const n = x => String(Math.round(x * 100) / 100).replace('.', ',');
 const pc = p => 'p' + p;
 const nm = p => esc(DB.persons[p].name);
 
-function toast(msg) {
-  const t = $('toast'); t.textContent = msg; t.classList.add('on');
-  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 3200);
+function toast(msg, actLabel, actFn) {
+  const t = $('toast');
+  t.innerHTML = esc(msg) + (actLabel ? ` <button type="button" class="toastbtn" data-act="toastAct">${esc(actLabel)}</button>` : '');
+  t.classList.toggle('act', !!actLabel); S.toastFn = actFn || null; t.classList.add('on');
+  clearTimeout(toast.t); toast.t = setTimeout(() => { t.classList.remove('on'); S.toastFn = null; }, actLabel ? 6000 : 3200);
+}
+// Suppression avec « Annuler » pendant 6 secondes, au lieu d'une confirmation.
+function undoable(label, fn) {
+  const before = JSON.stringify(DB), prevDel = { ...DB.deleted };
+  fn(); save(); render();
+  toast(label, 'Annuler', () => {
+    const removed = Object.keys(DB.deleted).filter(id => !(id in prevDel)), now = Date.now();
+    DB = migrate(JSON.parse(before));
+    [DB.entries, DB.trips, DB.appts].forEach(coll => coll.forEach(x => { if (removed.includes(x.id)) x.u = now; }));
+    removed.forEach(id => { delete DB.deleted[id]; });
+    save(); if ($('dlg').open) $('dlg').close(); render(); toast('Suppression annulée');
+  });
 }
 function row(label, value, cls) { return `<div class="row${cls ? ' ' + cls : ''}"><span>${label}</span><b>${value}</b></div>`; }
 
 function render() {
   $('yearLbl').textContent = S.year;
-  document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === S.view));
-  $('fab').classList.toggle('hide', S.view === 'set' || S.view === 'ponts');
-  const v = { home: renderHome, cal: renderCal, ponts: renderPonts, list: renderList, trips: renderAgenda, set: renderSet }[S.view];
-  $('view').innerHTML = v();
+  const sub = ['ponts', 'list', 'set'].includes(S.view);
+  document.querySelectorAll('nav.tabs button[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === (sub ? 'more' : S.view)));
+  const v = { home: renderHome, cal: renderCal, ponts: renderPonts, list: renderList, trips: renderAgenda, set: renderSet, more: renderMore }[S.view];
+  $('view').innerHTML = (sub ? '<button type="button" class="back" data-act="tab" data-v="more">‹ Plus</button>' : '') + v();
   setSyncState();
   const sv = $('swver');
   if (sv && typeof caches !== 'undefined') caches.keys().then(k => { sv.textContent = 'cache ' + (k.filter(x => x.startsWith('conges-duo')).join(', ') || 'aucun'); }).catch(() => {});
@@ -346,12 +360,104 @@ function dstCard() {
     <button class="btn sm" data-act="dstIcs">Agenda iPhone (.ics)</button>
     ${canNotif ? '<button class="btn sm" data-act="notifOn">Activer les notifications</button>' : ''}</div></section>`;
 }
+/* ----- Accueil « Aujourd'hui » ----- */
+const JOURS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+function longDate(s) { const d = parse(s); return `${JOURS[d.getUTCDay()]} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`; }
+const ICON = {
+  sun: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"></path><path d="M4 11a8 8 0 0 1 16 0z"></path></svg>',
+  pin: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"></path><circle cx="12" cy="9.5" r="2.5"></circle></svg>',
+  clock: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2.5 2.5M9 2h6"></path></svg>',
+  beach: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"></path><path d="M4 11a8 8 0 0 1 16 0z"></path></svg>',
+  plane: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 16l20-8-3-2-6 2-6-4-2 1 4 5-4 2-2-1-1 1z"></path><path d="M3 21h18"></path></svg>',
+  bridge: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 16c4-7 14-7 18 0"></path><path d="M3 16h18M7 12v4M12 10v6M17 12v4"></path></svg>',
+  list: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"></path></svg>',
+  gear: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>',
+  chart: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"></path></svg>',
+};
+function todayStatus(p, s, idx) {
+  const i = dayInfo(p, s, idx), k = i.am.k === i.pm.k ? i.am.k : 'half';
+  const label = { rest: 'Repos', hol: 'Férié', bloc: 'Fermeture', conge: 'En congé', recup: 'Récup heures sup', extra: 'Travail en plus', work: 'Au travail', half: 'Demi-journée' }[k] || 'Au travail';
+  let sub = '';
+  if (k === 'work' || k === 'extra') {
+    const pl = DB.persons[p].sched.enabled ? planned(p, s) : null;
+    if (pl) sub = `${pl.start} – ${pl.end} · ${pl.season === 'summer' ? 'été' : 'hiver'}`;
+  } else if (i.am.st === 'demande') sub = 'à valider';
+  if (!sub) { const ti = dayInfo(p, addDays(s, 1), idx); sub = ti.amOff && ti.pmOff ? 'demain : off' : 'demain : au travail'; }
+  return { label, sub };
+}
+function nextTogether(idx) {
+  const t = todayISO(); let run = null;
+  for (let i = -15; i < 400; i++) {
+    const d = addDays(t, i), both = offFrac('a', d, idx) === 1 && offFrac('b', d, idx) === 1;
+    if (both) { if (!run) run = { start: d, end: d }; else run.end = d; }
+    else if (run) { if (run.end >= t && daysBetween(run.start, run.end) >= 2) break; run = null; }
+  }
+  if (!run || run.end < t || daysBetween(run.start, run.end) < 2) return null;
+  const len = daysBetween(run.start, run.end) + 1;
+  const trip = (DB.trips || []).find(x => x.start && x.start <= run.end && (x.end || x.start) >= run.start);
+  const ent = DB.entries.find(e => e.note && e.date >= run.start && e.date <= run.end && ['conge', 'otrecup'].includes(e.type));
+  const cl = clusters(+run.start.slice(0, 4)).concat(clusters(+run.start.slice(0, 4) - 1)).find(c => c.days.some(d => d >= run.start && d <= run.end));
+  return { ...run, len, inDays: daysBetween(t, run.start), label: trip ? trip.title : cl ? cl.title : ent ? ent.note : 'Vacances' };
+}
+function ringCard(p, y) {
+  const c = counters(p, y), C = 276.46, used = c.pris + c.prevu, tot = c.total || 1;
+  const frac = Math.min(1, used / tot), over = Math.max(0, -c.restant), ofr = Math.min(1, over / tot);
+  const col = p === 'a' ? 'var(--a)' : 'var(--b)';
+  return `<button type="button" class="ring ${pc(p)}" data-act="openDet" data-p="${p}">
+    <span class="ringwrap"><svg width="104" height="104" viewBox="0 0 104 104" role="img" aria-label="${nm(p)} : ${over ? `${n(over)} jours en trop` : `${n(c.restant)} jours restants sur ${n(c.total)}`}">
+      <circle cx="52" cy="52" r="44" fill="none" stroke="var(--track)" stroke-width="10"></circle>
+      <circle class="arc" cx="52" cy="52" r="44" fill="none" stroke="${col}" stroke-width="10" stroke-linecap="round" stroke-dasharray="${(C * frac).toFixed(1)} ${C}" transform="rotate(-90 52 52)"></circle>
+      ${over ? `<circle class="arc" cx="52" cy="52" r="44" fill="none" stroke="var(--warn)" stroke-width="10" stroke-linecap="round" stroke-dasharray="${(C * ofr).toFixed(1)} ${C}" transform="rotate(-90 52 52)"></circle>` : ''}
+    </svg><span class="ringval${over ? ' over' : ''}">${over ? '−' + n(over) : n(c.restant)} j</span></span>
+    <b>${nm(p)}</b><small>${over ? 'jours en trop en ' + y : `restants sur ${n(c.total)} en ${y}`}</small></button>`;
+}
+function pendingGroups() {
+  const g = {};
+  DB.entries.filter(e => e.status === 'demande' && ['conge', 'otrecup', 'extra'].includes(e.type)).sort((a, b) => a.date.localeCompare(b.date)).forEach(e => {
+    const k = e.person + '|' + (e.note || e.id);
+    if (!g[k]) g[k] = { id: e.id, person: e.person, label: e.note || TYPES[e.type], start: e.date, end: e.date, days: 0 };
+    g[k].end = e.date; g[k].days += val(e);
+  });
+  return Object.values(g).sort((a, b) => a.start.localeCompare(b.start));
+}
 function renderHome() {
   if (S.invite && !isStandalone()) return inviteGuide();
-  const order = SY.me === 'b' ? ['b', 'a'] : ['a', 'b'];
-  return (S.invite ? '' : iosHint()) + homeSetup() + dstCard() + order.map(p => personCard(p, S.year)).join('') +
-    `<p class="muted center">Fériés vaudois calculés automatiquement. Touchez un jour du calendrier ou + pour saisir.</p>`;
+  const t = todayISO(), idx = buildIdx(), order = SY.me === 'b' ? ['b', 'a'] : ['a', 'b'], me = SY.me || 'a';
+  let h = (S.invite ? '' : iosHint());
+  h += `<header class="hello"><span class="muted">${longDate(t)}</span><h2>Bonjour ${nm(me)}</h2></header>`;
+  h += `<div class="today">${order.map(p => { const st = todayStatus(p, t, idx); return `<div class="tcard ${pc(p)}"><span class="tname"><span class="dot"></span>${p === SY.me ? 'Toi' : nm(p)}</span><b>${st.label}</b><small>${esc(st.sub)}</small></div>`; }).join('')}</div>`;
+  h += homeSetup() + dstCard();
+  const nt = nextTogether(idx);
+  if (nt) {
+    const bars = Array.from({ length: Math.min(nt.len, 14) }, (_, i) => `<span class="${i % 2 ? 'pb' : 'pa'}"></span>`).join('');
+    h += `<section class="hero"><span class="herot">${ICON.sun} ${nt.inDays > 0 ? 'Prochaines vacances ensemble' : 'Vacances ensemble en ce moment'}</span>
+      ${nt.inDays > 0 ? `<div class="herobig"><b>${nt.inDays}</b><span>jour${nt.inDays > 1 ? 's' : ''}</span></div>` : `<div class="herobig"><b>${daysBetween(t, nt.end) + 1}</b><span>jour(s) restant(s)</span></div>`}
+      <span class="herosub">${esc(nt.label)} · du ${short(nt.start).slice(3)} au ${short(nt.end).slice(3)} · ${nt.len} jours à deux</span>
+      <div class="herobars" aria-hidden="true">${bars}</div></section>`;
+  }
+  h += `<div class="rings">${order.map(p => ringCard(p, S.year)).join('')}</div>`;
+  const pend = pendingGroups();
+  if (pend.length) {
+    h += `<section class="card pend"><div class="pendh"><h2>${pend.length} demande${pend.length > 1 ? 's' : ''} à valider</h2><button type="button" class="linkbtn" data-act="tab" data-v="list">Tout voir</button></div>
+      ${pend.slice(0, 4).map(g => `<div class="pendrow ${pc(g.person)}"><span class="dot"></span><div class="grow"><b>${esc(g.label)}</b><small>${nm(g.person)} · ${short(g.start).slice(3)}${g.end !== g.start ? ' → ' + short(g.end).slice(3) : ''} · ${n(g.days)} j</small></div>
+        <button type="button" class="vbtn" data-act="validate" data-id="${g.id}">Valider</button></div>`).join('')}</section>`;
+  }
+  const na = (DB.appts || []).filter(a => a.date && a.date >= t).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || '')))[0];
+  if (na) h += `<button type="button" class="card nextappt" data-act="editAppt" data-id="${na.id}"><span class="napi">${ICON.pin}</span><span class="grow"><small>Prochain rendez-vous</small><b>${esc(na.title)} · ${short(na.date)}${na.time ? ' à ' + na.time : ''}</b><small>${esc(na.place || '')}${na.place ? ' · ' : ''}${na.who === 'both' || !na.who ? 'vous deux' : nm(na.who)}</small></span></button>`;
+  h += order.map(p => sect('det-' + p, `<span class="dot"></span><span class="grow">Détails ${nm(p)} ${S.year}</span>`, personCard(p, S.year), pc(p))).join('');
+  return h + '<p class="muted center">Fériés vaudois calculés automatiquement.</p>';
 }
+function renderMore() {
+  const me = SY.me || 'a';
+  const item = (act, v, icon, title, sub) => `<button type="button" class="moreitem" data-act="${act}" ${v}><span class="moreic">${icon}</span><span class="grow"><b>${title}</b><small>${sub}</small></span><span aria-hidden="true">›</span></button>`;
+  return `<h2 class="pagetitle">Plus</h2><div class="morelist">
+    ${item('tab', 'data-v="ponts"', ICON.bridge, 'Ponts', 'Les jours à poser pour être off ensemble')}
+    ${item('tab', 'data-v="list"', ICON.list, 'Saisies et demandes', 'Tout ce qui est noté, à valider ou pris')}
+    ${DB.persons[me].ot.enabled ? item('recap', `data-p="${me}"`, ICON.chart, 'Récap des heures sup', 'Mois par mois, avec export')  : ''}
+    ${item('tab', 'data-v="set"', ICON.gear, 'Réglages', 'Contrat, horaires, notifications, sauvegarde')}
+  </div>`;
+}
+
 function personCard(p, y) {
   const per = DB.persons[p], c = counters(p, y), tot = c.total;
   const over = Math.max(0, -c.restant), overPris = Math.max(0, -c.restantPris);
@@ -881,7 +987,7 @@ function remRow(r) {
     <button class="iconbtn" data-act="delRem" aria-label="Retirer ce rappel" style="margin-bottom:2px">✕</button></div>`;
 }
 function openAppt(id) {
-  const a = (DB.appts || []).find(x => x.id === id) || { who: 'both', date: todayISO(), reminders: [{ n: 2, u: 'h' }, { n: 45, u: 'm' }] };
+  const a = (DB.appts || []).find(x => x.id === id) || { who: S.addWho || 'both', date: todayISO(), reminders: [{ n: 2, u: 'h' }, { n: 45, u: 'm' }] };
   showDialog(`<h2>${id ? 'Modifier le rendez-vous' : 'Nouveau rendez-vous'}</h2>
     ${field('Titre', `<input name="a_title" value="${esc(a.title || '')}" placeholder="ex. Notaire, mariage, rendez-vous banque">`)}
     <div class="two">${field('Date', `<input type="date" name="a_date" value="${a.date || ''}">`)}${field('Lieu', `<input name="a_place" value="${esc(a.place || '')}">`)}</div>
@@ -992,14 +1098,14 @@ function joinWithCode() {
   } catch (e) { toast('Code non reconnu : copiez-le en entier.'); }
 }
 function openAdd() {
-  const td = todayISO();
-  const ps = SY.me ? [SY.me] : P;
+  const w = S.addWho || SY.me || 'a';
+  const chip = (v, label, dot) => `<button type="button" class="chip2${w === v ? ' on' : ''}" data-act="addWho" data-v="${v}">${dot ? `<span class="dot ${pc(v)}"></span>` : ''}${label}</button>`;
+  const tile = (act, icon, title, sub) => `<button type="button" class="tile" data-act="${act}">${icon}<b>${title}</b><small>${sub}</small></button>`;
   showDialog(`<h2>Ajouter</h2>
-    ${ps.map(p => `<button class="btn wide pri" style="text-align:left" data-act="hours" data-p="${p}" data-d="${td}">⏱ ${SY.me ? 'Mes horaires' : 'Horaires de ' + nm(p)}<br><small>heure d\u2019arrivée, de départ, pause de midi</small></button>`).join('')}
-    <button class="btn wide" style="text-align:left" data-act="addLeave">🏖 Congé, absence ou travail en plus</button>
-    <button class="btn wide" style="text-align:left" data-act="newAppt">📌 Rendez-vous</button>
-    <button class="btn wide" style="text-align:left" data-act="newTrip">✈ Voyage</button>
-    <div class="btns end"><button class="btn" data-act="close">Annuler</button></div>`);
+    <span class="lbl">Pour qui</span>
+    <div class="chips2">${chip('a', SY.me === 'a' ? 'Moi' : nm('a'), 1)}${chip('b', SY.me === 'b' ? 'Moi' : nm('b'), 1)}${chip('both', 'Les deux')}</div>
+    <span class="lbl">Quoi</span>
+    <div class="tiles">${tile('addLeave', ICON.beach, 'Congé', 'absence, travail en plus')}${tile('addHours', ICON.clock, 'Horaires', 'arrivée, départ, midi')}${tile('newAppt', ICON.pin.replace(/20/g, '24'), 'Rendez-vous', 'avec rappels')}${tile('newTrip', ICON.plane, 'Voyage', 'billets, hôtel')}</div>`);
 }
 function showNotif(t, b) {
   showDialog(`<h2>${esc(t || 'Congés Duo')}</h2><p style="font-size:16px">${esc(b || '')}</p>
@@ -1122,6 +1228,7 @@ function entryForm(e, isEdit) {
     ${field('Type', `<select name="f_type">${typeOpts}</select>`)}
     <p class="muted hide" data-row="reshint">Réserve disponible (après congés prévus) : ${resHint}</p>
     <div class="field" data-row="part"><span class="lbl">Durée</span>${radios('f_part', Object.entries(PARTS), e.part || 'full')}</div>
+    ${isEdit ? '' : '<div class="preview" id="lvPrev" aria-live="polite"></div>'}
     ${field('Heures faites', `<input type="number" inputmode="decimal" step="0.25" name="f_hours" value="${e.hours || ''}">`, 'hide" data-row="hours')}
     ${field('Statut', `<select name="f_status">${isEdit ? '' : '<option value="auto">Auto : passé = pris, futur = à valider</option>'}
       ${['demande', 'prevu', 'pris'].map(k => `<option value="${k}"${isEdit && e.status === k ? ' selected' : ''}>${{ demande: 'À valider (demandé au chef)', prevu: 'Validé (à venir)', pris: 'Pris' }[k]}</option>`).join('')}</select>`)}
@@ -1138,7 +1245,7 @@ function openDay(s) {
     ${list ? `<div class="existing">${list}</div>` : ''}
     ${(DB.appts || []).filter(x => x.date === s).map(x => `<div class="entry"><div class="grow">📌 <b>${esc(x.title)}</b>${x.time ? ` à ${x.time}` : ''}</div><button class="iconbtn" data-act="editAppt" data-id="${x.id}" aria-label="Modifier">✎</button></div>`).join('')}
     ${P.filter(p => DB.persons[p].sched.enabled && isWorkday(p, s)).map(p => `<button class="btn sm ${pc(p)}" data-act="hours" data-p="${p}" data-d="${s}">⏱ Horaires de ${nm(p)}</button>`).join(' ')}
-    <h3>Nouvelle saisie</h3>${entryForm({ date: s, person: SY.me || 'both', type: 'conge', part: 'full' }, false)}
+    <h3>Nouvelle saisie</h3>${entryForm({ date: s, person: S.addWho || SY.me || 'both', type: 'conge', part: 'full' }, false)}
     <div class="btns end"><button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveAdd">Enregistrer</button></div>`);
 }
 function openEdit(id) {
@@ -1146,13 +1253,27 @@ function openEdit(id) {
   showDialog(`<h2>Modifier la saisie</h2>${entryForm(e, true)}
     <div class="btns end"><button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveEdit" data-id="${id}">Enregistrer</button></div>`);
 }
-function showDialog(html) { $('dlgBody').innerHTML = html; syncForm(); const d = $('dlg'); if (!d.open) d.showModal(); }
+function showDialog(html) { $('dlgBody').innerHTML = html; syncForm(); leavePreview(); const d = $('dlg'); if (!d.open) d.showModal(); }
 function syncForm() {
   const t = document.querySelector('[name=f_type]'); if (!t) return;
   const ot = t.value === 'otdone';
   document.querySelector('[data-row=part]').classList.toggle('hide', ot);
   document.querySelector('[data-row=hours]').classList.toggle('hide', !ot);
   const rh = document.querySelector('[data-row=reshint]'); if (rh) rh.classList.toggle('hide', t.value !== 'otrecup');
+}
+function leavePreview() {
+  const el = $('lvPrev'); if (!el) return;
+  const f = readForm();
+  if (!f.date || f.type === 'otdone') { el.innerHTML = ''; return; }
+  const persons = f.who === 'both' ? P : [f.who], last = f.end && f.end > f.date ? f.end : f.date;
+  el.innerHTML = persons.map(p => {
+    let cnt = 0, skip = 0;
+    for (let s = f.date; s <= last; s = addDays(s, 1)) { if (blockReason(p, s, f.type, f.part, null)) skip++; else cnt += f.part === 'full' ? 1 : 0.5; }
+    let after = '';
+    if (f.type === 'conge') after = ` · il restera ${n(counters(p, +f.date.slice(0, 4)).restant - cnt)} j`;
+    if (f.type === 'otrecup') { const hpd = +DB.persons[p].ot.hoursPerDay || 0; after = ` · réserve après : ${n(otBalance(p, '9999-12-31', true) - cnt * hpd)} h`; }
+    return `<div><span class="dot ${pc(p)}"></span> <b>${nm(p)}</b> : <b class="big2">${n(cnt)} j</b> ${f.type === 'extra' ? 'en plus' : 'décomptés'}${after}${skip ? `<br><small>${skip} jour(s) non comptés : repos, fériés ou déjà saisis</small>` : ''}</div>`;
+  }).join('');
 }
 function readForm() {
   const q = nme => document.querySelector(`[name=${nme}]`), r = nme => (document.querySelector(`[name=${nme}]:checked`) || {}).value;
@@ -1342,6 +1463,10 @@ function onClick(ev) {
   }
   else if (a === 'day') openDay(b.dataset.d);
   else if (a === 'add') openAdd();
+  else if (a === 'addWho') { S.addWho = b.dataset.v; openAdd(); }
+  else if (a === 'addHours') { const p = S.addWho && S.addWho !== 'both' ? S.addWho : (SY.me || 'a'); openHours(p, todayISO()); }
+  else if (a === 'toastAct') { const f = S.toastFn; S.toastFn = null; $('toast').classList.remove('on'); if (f) f(); }
+  else if (a === 'openDet') { S.open.add('det-' + b.dataset.p); render(); const el = document.querySelector(`details[data-k="det-${b.dataset.p}"]`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   else if (a === 'addLeave') openDay(S.view === 'cal' && S.year === new Date().getFullYear() && S.calM === new Date().getMonth() + 1 ? todayISO()
     : S.view === 'cal' ? iso(S.year, S.calM, 1) : todayISO());
   else if (a === 'edit') { const e = DB.entries.find(x => x.id === b.dataset.id); if (e && e.times) openHours(e.person, e.date); else if (e && e.type === 'otbal') openReserve(e.person, e.id); else openEdit(b.dataset.id); }
@@ -1355,9 +1480,9 @@ function onClick(ev) {
   else if (a === 'notifOn') { if (typeof Notification !== 'undefined') Notification.requestPermission().then(() => { render(); dstNotify(); }); }
   else if (a === 'del') {
     const e = DB.entries.find(x => x.id === b.dataset.id); if (!e) return;
-    if (!confirm(`Supprimer : ${DB.persons[e.person].name}, ${TYPES[e.type]} du ${frDate(e.date)} ?`)) return;
-    DB.entries = DB.entries.filter(x => x.id !== e.id); DB.deleted[e.id] = Date.now(); save();
-    if ($('dlg').open) openDay(e.date); render(); toast('Saisie supprimée');
+    const wasOpen = $('dlg').open && !document.querySelector('[data-act=saveHours],[data-act=saveReserve]');
+    undoable(`${TYPES[e.type]} du ${short(e.date)} supprimé`, () => { DB.entries = DB.entries.filter(x => x.id !== e.id); DB.deleted[e.id] = Date.now(); });
+    if (wasOpen) openDay(e.date); else if ($('dlg').open) $('dlg').close();
   }
   else if (a === 'close') $('dlg').close();
   else if (a === 'saveAdd') saveAdd();
@@ -1373,10 +1498,8 @@ function onClick(ev) {
       grp.forEach(x => { x.status = x.date <= todayISO() ? 'pris' : 'prevu'; x.u = Date.now(); });
       save(); render(); toast(`${n(days)} jour(s) validé(s)${label}`);
     } else {
-      if (!confirm(`Demande refusée${label} : supprimer ${n(days)} jour(s) pour ${DB.persons[e.person].name} ?`)) return;
       const ids = new Set(grp.map(x => x.id));
-      DB.entries = DB.entries.filter(x => !ids.has(x.id)); ids.forEach(id => { DB.deleted[id] = Date.now(); });
-      save(); render(); toast(`${n(days)} jour(s) supprimé(s)${label}`);
+      undoable(`Demande refusée : ${n(days)} j supprimé(s)`, () => { DB.entries = DB.entries.filter(x => !ids.has(x.id)); ids.forEach(id => { DB.deleted[id] = Date.now(); }); });
     }
   }
   else if (a === 'editTrip') openTrip(b.dataset.id);
@@ -1386,8 +1509,8 @@ function onClick(ev) {
   else if (a === 'saveAppt') saveAppt(b.dataset.id);
   else if (a === 'delAppt') {
     const x = (DB.appts || []).find(y => y.id === b.dataset.id); if (!x) return;
-    if (!confirm(`Supprimer le rendez-vous « ${x.title} » ?`)) return;
-    DB.appts = DB.appts.filter(y => y.id !== x.id); DB.deleted[x.id] = Date.now(); save(); $('dlg').close(); render(); toast('Rendez-vous supprimé');
+    $('dlg').close();
+    undoable(`Rendez-vous « ${x.title} » supprimé`, () => { DB.appts = DB.appts.filter(y => y.id !== x.id); DB.deleted[x.id] = Date.now(); });
   }
   else if (a === 'addRem') { const box = $('rems'); if (box) box.insertAdjacentHTML('beforeend', remRow({ n: 1, u: 'h' })); }
   else if (a === 'delRem') { const r = b.closest('.rem'); if (r) r.remove(); }
@@ -1415,8 +1538,8 @@ function onClick(ev) {
   else if (a === 'perDelete') {
     const e = DB.entries.find(x => x.id === b.dataset.id); if (!e) return;
     const per = periodOf(e);
-    if (!confirm(`Supprimer toute la période (${per.length} jour(s)) de ${DB.persons[e.person].name} ?`)) return;
-    periodRemove(per); save(); $('dlg').close(); render(); toast('Période supprimée');
+    $('dlg').close();
+    undoable(`Période supprimée (${per.length} j)`, () => periodRemove(per));
   }
   else if (a === 'notifSeen') { S.lastNotif = null; if (typeof caches !== 'undefined') caches.open('cd-notifs').then(c => c.delete('./__derniere-notification')).catch(() => {}); render(); }
   else if (a === 'saveTrip') saveTrip(b.dataset.id);
@@ -1490,7 +1613,8 @@ function onChange(ev) {
   } else if (t.id === 'importFile') {
     if (t.files[0]) importFile(t.files[0]); t.value = '';
   } else if (t.dataset.hdate) { if (t.value) openHours(t.dataset.hdate, t.value);
-  } else if (t.name === 'f_type') syncForm();
+  } else if (t.name === 'f_type') { syncForm(); leavePreview(); }
+  else if (t.name && t.name.startsWith('f_')) leavePreview();
 }
 function autoPris() {
   const t = todayISO(); let k = 0;
@@ -1511,6 +1635,7 @@ function init() {
   document.addEventListener('change', onChange);
   document.addEventListener('input', e => {
     if (e.target.dataset && e.target.dataset.hours) hoursCalc();
+    if (e.target.name && e.target.name.startsWith('f_')) leavePreview();
     if (e.target.dataset && e.target.dataset.res) { const v = parseFloat(String(e.target.value).replace(',', '.')) || 0, h = +e.target.dataset.res || 1, el = $('r_conv'); if (el) el.textContent = `= ${n(v / h)} jour(s) de ${n(h)} h`; }
   });
   document.addEventListener('toggle', e => { const d = e.target; if (d && d.dataset && d.dataset.k) { if (d.open) S.open.add(d.dataset.k); else S.open.delete(d.dataset.k); } }, true);
@@ -1530,7 +1655,7 @@ function init() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { apptTimes, periodOf, safeUrl, remText, recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
+  module.exports = { nextTogether, pendingGroups, apptTimes, periodOf, safeUrl, remText, recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
     getDB: () => DB, setDB: d => { DB = migrate(d); } };
 }
 if (typeof document !== 'undefined') init();
