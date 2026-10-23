@@ -4,7 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'congesDuo.v1';
-const APP_VERSION = '2026-10-23 n°10';
+const APP_VERSION = '2026-10-23 n°11';
 const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
@@ -881,7 +881,7 @@ function remRow(r) {
     <button class="iconbtn" data-act="delRem" aria-label="Retirer ce rappel" style="margin-bottom:2px">✕</button></div>`;
 }
 function openAppt(id) {
-  const a = (DB.appts || []).find(x => x.id === id) || { who: 'both', date: todayISO(), reminders: [{ n: 1, u: 'd' }, { n: 2, u: 'h' }] };
+  const a = (DB.appts || []).find(x => x.id === id) || { who: 'both', date: todayISO(), reminders: [{ n: 2, u: 'h' }, { n: 45, u: 'm' }] };
   showDialog(`<h2>${id ? 'Modifier le rendez-vous' : 'Nouveau rendez-vous'}</h2>
     ${field('Titre', `<input name="a_title" value="${esc(a.title || '')}" placeholder="ex. Notaire, mariage, rendez-vous banque">`)}
     <div class="two">${field('Date', `<input type="date" name="a_date" value="${a.date || ''}">`)}${field('Lieu', `<input name="a_place" value="${esc(a.place || '')}">`)}</div>
