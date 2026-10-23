@@ -1,7 +1,7 @@
 /* Congés Duo — service worker : réseau d'abord, cache en secours (hors ligne),
    et affichage des notifications de rappel. Changer la version à chaque mise à jour importante. */
-const CACHE = 'conges-duo-v5', NOTIF = 'cd-notifs', LAST = './__derniere-notification';
-const ASSETS = ['./', './index.html', './app.js', './manifest.json', './icon-192.png', './icon-512.png'];
+const CACHE = 'conges-duo-v6', NOTIF = 'cd-notifs', LAST = './__derniere-notification';
+const ASSETS = ['./', './index.html', './app.js', './manifest.json', './icon-192.png', './icon-512.png', './manrope.woff2'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
