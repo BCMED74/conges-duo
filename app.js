@@ -4,7 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'congesDuo.v1';
-const APP_VERSION = '2026-10-24 n°16';
+const APP_VERSION = '2026-10-24 n°17';
 const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
@@ -522,10 +522,10 @@ function renderCal() {
   for (let d = 1; d <= dim; d++) {
     const s = iso(y, m, d), hol = holidayName(s), ia = dayInfo('a', s, idx), ib = dayInfo('b', s, idx);
     const trip = trips.some(x => s >= x.start && s <= (x.end || x.start)), appt = (DB.appts || []).some(x => x.date === s) || (famOn() && famApptsOn(s).length > 0);
-    const kid = famOn() && (gardeAt(s) || {}).with === 'p1';
+    const kid = famOn() && (gardeAt(s) || {}).with === 'p1', sch = famOn() && schoolHolAt(s);
     if (hol) hols.push(`${short(s)} : ${hol}`);
     const both = ia.amOff && ia.pmOff && ib.amOff && ib.pmOff;
-    g += `<button class="day${hol ? ' hol' : ''}${s === t ? ' today' : ''}${both ? ' both' : ''}${kid ? ' kid' : ''}" data-act="day" data-d="${s}">
+    g += `<button class="day${hol ? ' hol' : ''}${s === t ? ' today' : ''}${both ? ' both' : ''}${kid ? ' kid' : ''}${sch ? ' sch' : ''}" data-act="day" data-d="${s}">
       <span class="num">${d}${trip || appt ? `<small class="mk">${trip ? '✈' : ''}${appt ? '📌' : ''}</small>` : ''}</span>${both ? '<span class="star" title="Off tous les deux">★</span>' : ''}${ia.ot || ib.ot ? '<span class="otm">h</span>' : ''}
       ${lane('a', ia)}${lane('b', ib)}</button>`;
   }
@@ -546,7 +546,7 @@ function renderCal() {
     <span><b class="otl">h</b> Heures sup</span>
     <span><b>✈</b> Voyage</span>
     <span><b>📌</b> Rendez-vous</span>
-    ${famOn() ? `<span><span class="kidsw"></span> Garde chez ${parentName('p1')}</span>` : ''}</div>`;
+    ${famOn() ? `<span><span class="kidsw"></span> Garde chez ${parentName('p1')}</span>` : ''}${famOn() && FY.school && FY.school.region ? '<span><span class="schlsw"></span> Vacances scolaires</span>' : ''}</div>`;
   return g;
 }
 
@@ -1258,7 +1258,7 @@ let famTimer = null, famBusy = false, famAgain = false;
 function famMigrate(d) {
   const def = famDefault(); d = d || {};
   const arr = k => (Array.isArray(d[k]) ? d[k] : []), obj = k => (d[k] && typeof d[k] === 'object' && !Array.isArray(d[k]) ? d[k] : {});
-  return { version: 1, su: +d.su || 0, members: arr('members'), parents: { ...def.parents, ...obj('parents') }, appts: arr('appts'), garde: arr('garde'), items: arr('items'), subs: obj('subs'), push: obj('push'), deleted: obj('deleted') };
+  return { version: 1, su: +d.su || 0, members: arr('members'), parents: { ...def.parents, ...obj('parents') }, appts: arr('appts'), garde: arr('garde'), items: arr('items'), school: obj('school'), subs: obj('subs'), push: obj('push'), deleted: obj('deleted') };
 }
 function famLoad() {
   try { FY = famMigrate(JSON.parse(localStorage.getItem(FAM_KEY) || '{}')); } catch (e) { FY = famDefault(); }
@@ -1274,7 +1274,7 @@ const famMe = () => FY.members.find(m => m.id === FSY.me) || null;
 const famAdult = () => !famOnly() || (famMe() && famMe().role === 'adulte');
 function famMerge(local, remote) {
   const L = famMigrate(local), R = famMigrate(remote), N = R.su > L.su ? R : L;
-  const out = { version: 1, su: Math.max(L.su, R.su), members: N.members, parents: N.parents, appts: [], garde: [], items: [], subs: { ...R.subs }, push: (+L.push.u || 0) >= (+R.push.u || 0) ? L.push : R.push, deleted: {} };
+  const out = { version: 1, su: Math.max(L.su, R.su), members: N.members, parents: N.parents, school: N.school, appts: [], garde: [], items: [], subs: { ...R.subs }, push: (+L.push.u || 0) >= (+R.push.u || 0) ? L.push : R.push, deleted: {} };
   for (const src of [L.deleted, R.deleted]) for (const id in src) out.deleted[id] = Math.max(out.deleted[id] || 0, +src[id] || 0);
   for (const k of ['appts', 'garde', 'items']) {
     const m = {};
@@ -1377,23 +1377,126 @@ function saveGarde(id) {
   Object.assign(g, { with: (document.querySelector('[name=g_with]:checked') || {}).value || 'p1', start, end, note: q('g_note').value.trim(), u: Date.now() });
   famSave(); $('dlg').close(); render(); toast('Garde enregistrée');
 }
+/* ----- Rythmes de garde ----- */
+// Motifs sur 14 jours (A = premier parent, B = l'autre), à partir du jour de départ.
+const RHYTHMS = {
+  alt: { label: 'Semaines alternées', hint: 'À partir du jour du changement (par exemple un vendredi).', pat: 'AAAAAAABBBBBBB' },
+  r223: { label: '2-2-3', hint: 'À partir d\u2019un lundi.', pat: 'AABBAAABBAABBB' },
+  r2255: { label: '2-2-5-5', hint: 'À partir d\u2019un lundi.', pat: 'AABBAAAAABBBBB' },
+  we: { label: 'Un week-end sur deux', hint: 'À partir du premier vendredi du week-end. Le reste du temps : le foyer habituel.', pat: '' },
+};
 function openAlternate() {
-  showDialog(`<h2>Semaines alternées</h2>
-    <p class="muted">Crée une semaine sur deux chez chaque parent. Le jour de début est le jour du changement (par exemple un vendredi).</p>
-    <div class="field"><span class="lbl">La première semaine, chez</span>${radios('al_first', [['p1', parentName('p1')], ['p2', parentName('p2')]], 'p1')}</div>
+  const t = S.rhythm || 'alt';
+  showDialog(`<h2>Rythme de garde</h2>
+    <div class="field"><span class="lbl">Rythme</span><select name="rh_type" data-rhtype="1">${Object.entries(RHYTHMS).map(([k, r]) => `<option value="${k}"${k === t ? ' selected' : ''}>${r.label}</option>`).join('')}</select></div>
+    <p class="muted">${RHYTHMS[t].hint}</p>
+    <div class="field"><span class="lbl">${t === 'we' ? 'Le week-end chez' : 'Au départ, chez'}</span>${radios('al_first', [['p1', parentName('p1')], ['p2', parentName('p2')]], 'p1')}</div>
     <div class="two">${field('À partir du', `<input type="date" name="al_start" value="${todayISO()}">`)}${field('Jusqu\u2019au', `<input type="date" name="al_end" value="${addDays(todayISO(), 180)}">`)}</div>
+    ${t === 'we' ? `<label class="check"><input type="checkbox" name="we_fri" checked> Dès le vendredi</label><label class="check"><input type="checkbox" name="we_wed"> + le mercredi chaque semaine</label>` : ''}
     <div class="btns end"><button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveAlternate">Créer</button></div>`);
 }
 function saveAlternate() {
   const q = k => document.querySelector(`[name=${k}]`), start = q('al_start').value, end = q('al_end').value;
   if (!start || !end || end < start) return toast('Vérifiez les dates.');
-  const series = 's' + uid(); let w = (document.querySelector('[name=al_first]:checked') || {}).value || 'p1', k = 0;
-  for (let s = start; s <= end; s = addDays(s, 7)) {
-    const e = addDays(s, 6) < end ? addDays(s, 6) : end;
-    FY.garde.push({ id: 'g' + uid() + k++, with: w, start: s, end: e, series, u: Date.now() });
-    w = w === 'p1' ? 'p2' : 'p1';
+  const type = q('rh_type').value, A = (document.querySelector('[name=al_first]:checked') || {}).value || 'p1', B = A === 'p1' ? 'p2' : 'p1';
+  const series = 's' + uid(), days = [];
+  for (let s = start, i = 0; s <= end; s = addDays(s, 1), i++) {
+    if (type === 'we') {
+      const k = i % 14, wd = dow(s);
+      const weekend = k <= 2 && (k > 0 || q('we_fri').checked), wed = q('we_wed').checked && wd === 3;
+      days.push({ d: s, w: weekend || wed ? A : null });
+    } else days.push({ d: s, w: RHYTHMS[type].pat[i % 14] === 'A' ? A : B });
   }
-  famSave(); $('dlg').close(); render(); toast(`${k} semaines créées`);
+  let k = 0, cur = null;
+  const flush = () => { if (cur && cur.w) FY.garde.push({ id: 'g' + uid() + k++, with: cur.w, start: cur.start, end: cur.end, series, u: Date.now() }); };
+  for (const x of days) { if (cur && cur.w === x.w) cur.end = x.d; else { flush(); cur = { w: x.w, start: x.d, end: x.d }; } }
+  flush();
+  if (type === 'we' && !FY.parents.main) { FY.parents.main = B; FY.su = Date.now(); }
+  famSave(); $('dlg').close(); render(); toast(`${k} périodes créées`);
+}
+
+/* ----- Vacances scolaires (Suisse : OpenHolidays · France : calendrier officiel de l'Éducation nationale) ----- */
+const CANTONS = [['CH-AG', 'Argovie'], ['CH-AI', 'Appenzell Rh.-Int.'], ['CH-AR', 'Appenzell Rh.-Ext.'], ['CH-BE', 'Berne'], ['CH-BL', 'Bâle-Campagne'], ['CH-BS', 'Bâle-Ville'], ['CH-FR', 'Fribourg'], ['CH-GE', 'Genève'], ['CH-GL', 'Glaris'], ['CH-GR', 'Grisons'], ['CH-JU', 'Jura'], ['CH-LU', 'Lucerne'], ['CH-NE', 'Neuchâtel'], ['CH-NW', 'Nidwald'], ['CH-OW', 'Obwald'], ['CH-SG', 'Saint-Gall'], ['CH-SH', 'Schaffhouse'], ['CH-SO', 'Soleure'], ['CH-SZ', 'Schwytz'], ['CH-TG', 'Thurgovie'], ['CH-TI', 'Tessin'], ['CH-UR', 'Uri'], ['CH-VD', 'Vaud'], ['CH-VS', 'Valais'], ['CH-ZG', 'Zoug'], ['CH-ZH', 'Zurich']];
+const ACADEMIES = ['Aix-Marseille', 'Amiens', 'Besançon', 'Bordeaux', 'Caen', 'Clermont-Ferrand', 'Corse', 'Créteil', 'Dijon', 'Grenoble', 'Guadeloupe', 'Guyane', 'Lille', 'Limoges', 'Lyon', 'Martinique', 'Mayotte', 'Montpellier', 'Nancy-Metz', 'Nantes', 'Nice', 'Normandie', 'Nouvelle Calédonie', 'Orléans-Tours', 'Paris', 'Poitiers', 'Polynésie', 'Reims', 'Rennes', 'Rouen', 'Réunion', 'Saint Pierre et Miquelon', 'Strasbourg', 'Toulouse', 'Versailles', 'Wallis et Futuna'];
+const schoolLabel = sc => (!sc || !sc.region ? '' : sc.country === 'FR' ? `académie de ${sc.region} (France)` : `canton de ${(CANTONS.find(c => c[0] === sc.region) || [])[1] || sc.region} (Suisse)`);
+async function fetchSchoolHols(country, region) {
+  const from = addDays(todayISO(), -30), to = addDays(todayISO(), 430), out = {};
+  if (country === 'FR') {
+    const where = encodeURIComponent(`location="${region}" and end_date>="${from}"`);
+    const r = await fetch(`https://data.education.gouv.fr/api/explore/v2.1/catalog/datasets/fr-en-calendrier-scolaire/records?where=${where}&limit=100&order_by=start_date`);
+    if (!r.ok) throw new Error('Calendrier français indisponible (' + r.status + ')');
+    const loc = v => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Paris' }).format(new Date(v));
+    for (const x of (await r.json()).results || []) {
+      const s = loc(x.start_date); let e = addDays(loc(x.end_date), -1); if (e < s) e = s;
+      const name = String(x.description || 'Vacances').replace(/\s+-\s+.*$/, ''), k = name + '|' + x.annee_scolaire;
+      if (!out[k] || e > out[k].end) out[k] = { name, start: s, end: e };
+    }
+  } else {
+    const r = await fetch(`https://openholidaysapi.org/SchoolHolidays?countryIsoCode=CH&subdivisionCode=${encodeURIComponent(region)}&languageIsoCode=FR&validFrom=${from}&validTo=${to}`);
+    if (!r.ok) throw new Error('Calendrier suisse indisponible (' + r.status + ')');
+    for (const x of await r.json()) {
+      const name = ((x.name || []).find(n => n.language === 'FR') || (x.name || [])[0] || {}).text || 'Vacances', k = x.startDate + x.endDate;
+      out[k] = { name, start: x.startDate, end: x.endDate };
+    }
+  }
+  return Object.values(out).filter(h => h.end >= from).sort((a, b) => a.start.localeCompare(b.start));
+}
+async function loadSchool(manual) {
+  const sc = FY.school || {};
+  if (!sc.region) return manual && toast('Choisissez d\u2019abord le pays et la région de l\u2019école.');
+  try {
+    const list = await fetchSchoolHols(sc.country, sc.region);
+    FY.school = { ...sc, list, fetched: Date.now() }; FY.su = Date.now(); famSave(); render();
+    if (manual) toast(`${list.length} périodes de vacances chargées`);
+  } catch (err) { if (manual) toast(err instanceof TypeError ? 'Pas de connexion.' : err.message); }
+}
+const schoolHolAt = s => ((FY.school && FY.school.list) || []).find(h => h.start <= s && s <= h.end) || null;
+function schoolSection() {
+  const sc = FY.school || {}, t = todayISO(), list = (sc.list || []).filter(h => h.end >= t).slice(0, 10);
+  if (!sc.region) return famAdult() && !famOnly() ? '<p class="muted">Astuce : indique l\u2019école de ton enfant dans Réglages › Espace famille pour voir ses vacances scolaires ici.</p>' : '';
+  const assigned = h => { const w = new Set(); for (let d = h.start; d <= h.end; d = addDays(d, 1)) { const g = gardeAt(d); if (g && !g.implicit) w.add(g.with); } return [...w].map(x => FY.parents[x]).join(' + '); };
+  return `<h3 class="sec">Vacances scolaires · ${esc(schoolLabel(sc))}</h3>
+    <section class="card list">${list.length ? list.map((h, i) => `<div class="entry"><span>🎒</span><div class="grow"><b>${esc(h.name)}</b><br><small class="muted">du ${short(h.start)} au ${short(h.end)}${assigned(h) ? ' · ' + esc(assigned(h)) : ''}</small></div>
+      ${famAdult() ? `<button class="btn sm" data-act="schoolHol" data-i="${(sc.list || []).indexOf(h)}">Répartir</button>` : ''}</div>`).join('') : '<p class="muted">Pas encore de dates publiées pour les mois à venir.</p>'}
+    ${famAdult() ? `<div class="btns"><button class="btn sm" data-act="schoolRule">Règle pour toutes les vacances</button><button class="btn sm" data-act="schoolReload">Actualiser</button></div>` : ''}</section>`;
+}
+function openSchoolHol(i) {
+  const h = FY.school.list[i]; if (!h) return;
+  const p1 = parentName('p1'), p2 = parentName('p2');
+  showDialog(`<h2>${esc(h.name)}</h2><p class="muted">du ${frDate(h.start)} au ${frDate(h.end)}</p>
+    <div class="field"><span class="lbl">Répartition</span><select name="sh_mode">
+      <option value="p1">Tout chez ${p1}</option><option value="p2">Tout chez ${p2}</option>
+      <option value="p1p2">1re moitié chez ${p1}, 2e chez ${p2}</option><option value="p2p1">1re moitié chez ${p2}, 2e chez ${p1}</option>
+      <option value="part">Seulement une partie (je choisis les dates)</option></select></div>
+    <div class="btns end"><button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveSchoolHol" data-i="${i}">Appliquer</button></div>`);
+}
+function applySchoolHol(h, mode) {
+  FY.garde = FY.garde.filter(g => !(g.school === h.start + h.name)) ;
+  const mk = (w, s, e, half) => FY.garde.push({ id: 'g' + uid() + Math.random().toString(36).slice(2, 5), with: w, start: s, end: e, note: h.name + (half ? ` (${half})` : ''), school: h.start + h.name, u: Date.now() });
+  const len = daysBetween(h.start, h.end) + 1, mid = addDays(h.start, Math.ceil(len / 2) - 1);
+  if (mode === 'p1' || mode === 'p2') mk(mode, h.start, h.end);
+  else { const [a, b] = mode === 'p1p2' ? ['p1', 'p2'] : ['p2', 'p1']; mk(a, h.start, mid, '1re moitié'); mk(b, addDays(mid, 1), h.end, '2e moitié'); }
+}
+function openSchoolRule() {
+  const p1 = parentName('p1'), p2 = parentName('p2');
+  showDialog(`<h2>Règle pour toutes les vacances</h2>
+    <p class="muted">S\u2019applique aux vacances scolaires déjà publiées qui ne sont pas encore réparties. Tu pourras ensuite modifier chaque période.</p>
+    <div class="field"><span class="lbl">Les années paires</span><select name="sr_even">
+      <option value="p1p2">1re moitié chez ${p1}, 2e chez ${p2}</option><option value="p2p1">1re moitié chez ${p2}, 2e chez ${p1}</option>
+      <option value="p1">Tout chez ${p1}</option><option value="p2">Tout chez ${p2}</option></select></div>
+    <label class="check"><input type="checkbox" name="sr_swap" checked> Les années impaires, on inverse</label>
+    <div class="btns end"><button class="btn" data-act="close">Annuler</button><button class="btn pri" data-act="saveSchoolRule">Appliquer</button></div>`);
+}
+function saveSchoolRule() {
+  const even = document.querySelector('[name=sr_even]').value, swap = document.querySelector('[name=sr_swap]').checked;
+  const inv = { p1p2: 'p2p1', p2p1: 'p1p2', p1: 'p2', p2: 'p1' }, t = todayISO();
+  let n2 = 0;
+  for (const h of FY.school.list || []) {
+    if (h.end < t || daysBetween(h.start, h.end) < 3 || FY.garde.some(g => g.school === h.start + h.name)) continue;
+    const odd = +h.start.slice(0, 4) % 2 === 1;
+    applySchoolHol(h, odd && swap ? inv[even] : even); n2++;
+  }
+  famSave(); $('dlg').close(); render(); toast(`${n2} périodes de vacances réparties`);
 }
 
 /* ----- Rendez-vous et activités famille ----- */
@@ -1454,9 +1557,9 @@ function packList(kidId) {
 function gardeSection() {
   const t = todayISO(), list = FY.garde.filter(g => g.status !== 'demande' && (g.end || g.start) >= t).sort((a, b) => a.start.localeCompare(b.start)).slice(0, 12);
   return `<h3 class="sec">Garde</h3>${gardeCard()}${famRequests()}
-    ${famAdult() ? `<div class="btns"><button class="btn sm pri" data-act="newGarde">+ Période (vacances, week-end…)</button><button class="btn sm" data-act="newAlternate">+ Semaines alternées</button></div>` : '<div class="btns"><button class="btn sm pri" data-act="gReq">Demander un changement</button></div>'}
+    ${famAdult() ? `<div class="btns"><button class="btn sm pri" data-act="newGarde">+ Période (vacances, week-end…)</button><button class="btn sm" data-act="newAlternate">+ Rythme (alternée, week-ends…)</button></div>` : '<div class="btns"><button class="btn sm pri" data-act="gReq">Demander un changement</button></div>'}
     ${list.length ? `<section class="card list">${list.map(g => `<div class="entry"><span class="gdot g-${g.with}"></span><div class="grow"><b>Chez ${parentName(g.with)}</b> <small class="muted">du ${short(g.start)} au ${short(g.end || g.start)}</small>${g.note ? `<br><small>${esc(g.note)}</small>` : ''}</div>
-      ${famAdult() ? `<button class="iconbtn" data-act="editGarde" data-id="${g.id}" aria-label="Modifier">✎</button>` : ''}</div>`).join('')}</section>` : ''}`;
+      ${famAdult() ? `<button class="iconbtn" data-act="editGarde" data-id="${g.id}" aria-label="Modifier">✎</button>` : ''}</div>`).join('')}</section>` : ''}${schoolSection()}`;
 }
 
 /* ----- Écrans du mode famille (téléphone de l'enfant ou de l'autre parent) ----- */
@@ -1477,19 +1580,19 @@ function renderFamHome() {
 function renderFamCal() {
   const y = S.year, m = S.calM, t = todayISO(), first = iso(y, m, 1), offset = (dow(first) + 6) % 7, dim = new Date(Date.UTC(y, m, 0)).getUTCDate();
   let g = `<div class="monthbar"><button class="iconbtn" data-act="month" data-d="-1" aria-label="Mois précédent">‹</button><strong>${MONTHS[m - 1]} ${y}</strong><button class="iconbtn" data-act="month" data-d="1" aria-label="Mois suivant">›</button></div>
-    <div class="who"><span><span class="gdot g-p1"></span>chez ${parentName('p1')}</span><span><span class="gdot g-p2"></span>chez ${parentName('p2')}</span><span>📌 rendez-vous</span></div>
+    <div class="who"><span><span class="gdot g-p1"></span>chez ${parentName('p1')}</span><span><span class="gdot g-p2"></span>chez ${parentName('p2')}</span><span>📌 rendez-vous</span>${FY.school && FY.school.region ? '<span><span class="schlsw"></span>vacances scolaires</span>' : ''}</div>
     <div class="grid">${['lu', 'ma', 'me', 'je', 've', 'sa', 'di'].map(d => `<div class="dow">${d}</div>`).join('')}`;
   for (let i = 0; i < offset; i++) g += '<div class="day empty"></div>';
   for (let d = 1; d <= dim; d++) {
     const s = iso(y, m, d), gd = gardeAt(s), ap = famApptsOn(s).length > 0, hol = holidayName(s);
     g += `<button class="day${hol ? ' hol' : ''}${s === t ? ' today' : ''}" data-act="famDay" data-d="${s}"><span class="num">${d}${ap ? '<small class="mk">📌</small>' : ''}</span>
-      <span class="lane"><i class="h ${gd ? 'g-' + gd.with + 'bg' : ''}"></i></span></button>`;
+      <span class="lane"><i class="h ${gd ? 'g-' + gd.with + 'bg' : ''}"></i></span>${schoolHolAt(s) ? '<span class="schl" aria-hidden="true"></span>' : ''}</button>`;
   }
   return g + '</div>';
 }
 function openFamDay(s) {
   const gd = gardeAt(s), ap = famApptsOn(s);
-  showDialog(`<h2>${frDate(s)}</h2>${holidayName(s) ? `<p class="holname">${esc(holidayName(s))}</p>` : ''}
+  showDialog(`<h2>${frDate(s)}</h2>${holidayName(s) ? `<p class="holname">${esc(holidayName(s))}</p>` : ''}${schoolHolAt(s) ? `<p>🎒 Vacances scolaires : <b>${esc(schoolHolAt(s).name)}</b></p>` : ''}
     <p>${gd ? `<span class="gdot g-${gd.with}"></span> Chez <b>${parentName(gd.with)}</b>${gd.note ? ' · ' + esc(gd.note) : ''}` : '<span class="muted">Pas de garde notée</span>'}</p>
     ${ap.map(a => `<div class="entry"><div class="grow">${a.repeat === 'weekly' ? '🔁' : '📌'} <b>${esc(a.title)}</b>${a.time ? ` à ${a.time}` : ''}${a.ride ? `<br><small class="muted">🚗 ${esc(rideText(a.ride))}</small>` : ''}</div><button class="iconbtn" data-act="editAppt" data-id="${a.id}" aria-label="Modifier">✎</button></div>`).join('')}
     <div class="btns end"><button class="btn" data-act="close">Fermer</button><button class="btn pri" data-act="newAppt" data-date="${s}">+ Rendez-vous</button></div>`);
@@ -1535,6 +1638,11 @@ function famSettings() {
     <div class="field"><span class="lbl">En dehors des périodes notées, ${esc(FY.members.filter(m => m.role === 'enfant').map(m => m.name).join(', ') || 'l\u2019enfant')} vit</span>
       ${radios('f_main', [['p1', 'chez ' + FY.parents.p1], ['p2', 'chez ' + FY.parents.p2], ['', 'pas de foyer habituel']], FY.parents.main || '')}</div>
     <p class="muted">Exemples : chez Maman toute l\u2019année et chez Papa pendant les vacances notées avec « + Période » ; ou pas de foyer habituel avec des semaines alternées.</p>
+    <h4>École (vacances scolaires automatiques)</h4>
+    <div class="two">${field('Pays', `<select data-fschool="country"><option value="">—</option><option value="CH"${(FY.school || {}).country === 'CH' ? ' selected' : ''}>Suisse</option><option value="FR"${(FY.school || {}).country === 'FR' ? ' selected' : ''}>France</option></select>`)}
+      ${field((FY.school || {}).country === 'FR' ? 'Académie' : 'Canton', `<select data-fschool="region"><option value="">—</option>${((FY.school || {}).country === 'FR' ? ACADEMIES.map(a => [a, a]) : (FY.school || {}).country === 'CH' ? CANTONS : []).map(([k, l]) => `<option value="${k}"${(FY.school || {}).region === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`)}</div>
+    <p class="muted">${(FY.school || {}).country === 'FR' ? 'Exemple : la Haute-Corse et la Corse-du-Sud sont dans l\u2019académie « Corse ». Source : calendrier officiel de l\u2019Éducation nationale.' : 'Source : OpenHolidays (données ouvertes). Certaines dates suisses sont publiées tardivement.'}</p>
+    ${(FY.school || {}).region ? `<p class="syncline">${((FY.school || {}).list || []).length} périodes chargées${(FY.school || {}).fetched ? ' · ' + new Date(FY.school.fetched).toLocaleDateString('fr-CH') : ''}</p><div class="btns"><button class="btn sm" data-act="schoolReload">Actualiser les vacances</button></div>` : ''}
     <h4>Notifications famille sur ce téléphone</h4>
     <div class="row"><span>Ce téléphone</span><b>${famPushOk() ? 'activé' : 'non activé'}</b></div>
     ${subs.map(([k, v]) => `<div class="row"><span>${esc(v.name || '')}</span><b>${esc(famName(v.person))}</b></div>`).join('')}
@@ -1605,6 +1713,7 @@ function openDay(s) {
   showDialog(`<h2>${frDate(s)}</h2>${hol ? `<p class="holname">${esc(hol)}</p>` : ''}
     <p class="muted">${P.map(p => `${nm(p)} : ${dayStateText(p, s)}`).join('<br>')}</p>
     ${list ? `<div class="existing">${list}</div>` : ''}
+    ${famOn() && schoolHolAt(s) ? `<p>🎒 Vacances scolaires : <b>${esc(schoolHolAt(s).name)}</b></p>` : ''}
     ${famOn() && gardeAt(s) ? `<p><span class="gdot g-${gardeAt(s).with}"></span> Garde : chez <b>${parentName(gardeAt(s).with)}</b>${gardeAt(s).note ? ' · ' + esc(gardeAt(s).note) : ''}</p>` : ''}
     ${(DB.appts || []).filter(x => x.date === s).concat(famOn() ? famApptsOn(s) : []).map(x => `<div class="entry"><div class="grow">📌 <b>${esc(x.title)}</b>${x.time ? ` à ${x.time}` : ''}</div><button class="iconbtn" data-act="editAppt" data-id="${x.id}" aria-label="Modifier">✎</button></div>`).join('')}
     ${P.filter(p => DB.persons[p].sched.enabled && isWorkday(p, s)).map(p => `<button class="btn sm ${pc(p)}" data-act="hours" data-p="${p}" data-d="${s}">⏱ Horaires de ${nm(p)}</button>`).join(' ')}
@@ -1958,6 +2067,15 @@ function onClick(ev) {
     famSave(); $('dlg').close(); render(); toast('Garde supprimée');
   }
   else if (a === 'newAlternate') openAlternate();
+  else if (a === 'schoolHol') openSchoolHol(+b.dataset.i);
+  else if (a === 'saveSchoolHol') {
+    const h = FY.school.list[+b.dataset.i], mode = document.querySelector('[name=sh_mode]').value; if (!h) return;
+    if (mode === 'part') { $('dlg').close(); openGarde(); const q = k => document.querySelector(`[name=${k}]`); q('g_start').value = h.start; q('g_end').value = h.end; q('g_note').value = h.name; return; }
+    applySchoolHol(h, mode); famSave(); $('dlg').close(); render(); toast('Vacances réparties');
+  }
+  else if (a === 'schoolRule') openSchoolRule();
+  else if (a === 'saveSchoolRule') saveSchoolRule();
+  else if (a === 'schoolReload') loadSchool(true);
   else if (a === 'saveAlternate') saveAlternate();
   else if (a === 'period') openPeriod(b.dataset.id);
   else if (a === 'perSave') periodSave(b.dataset.id);
@@ -2046,6 +2164,10 @@ function onChange(ev) {
   } else if (t.id === 'importFile') {
     if (t.files[0]) importFile(t.files[0]); t.value = '';
   } else if (t.dataset.fsync) { FSY[t.dataset.fsync] = t.value.trim(); famSaveSync();
+  } else if (t.dataset.fschool) {
+    FY.school = { ...(FY.school || {}), [t.dataset.fschool]: t.value }; if (t.dataset.fschool === 'country') { FY.school.region = ''; FY.school.list = []; }
+    FY.su = Date.now(); famSave(); render(); if (FY.school.region) loadSchool(true);
+  } else if (t.dataset.rhtype) { S.rhythm = t.value; openAlternate();
   } else if (t.name === 'f_main') { FY.parents.main = t.value; FY.su = Date.now(); famSave(); render();
   } else if (t.dataset.fpar) { FY.parents[t.dataset.fpar] = t.value.trim() || FY.parents[t.dataset.fpar]; FY.su = Date.now(); famSave();
   } else if (t.dataset.reptoggle) { const u = document.querySelector('[data-row=until]'); if (u) u.hidden = !t.checked;
@@ -2092,13 +2214,14 @@ function init() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { scheduleSync(300); famSchedule(500); loadLastNotif(); } });
   window.addEventListener('online', () => famSchedule(500));
   famSchedule(900);
+  setTimeout(() => { if (famOn() && FY.school && FY.school.region && (!FY.school.fetched || Date.now() - FY.school.fetched > 20 * 864e5)) loadSchool(false); }, 4000);
   loadLastNotif();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { famOccurrences, famMerge, gardeAt, gardeRuns, getFY: () => FY, setFY: d => { FY = famMigrate(d); }, nextTogether, pendingGroups, apptTimes, periodOf, safeUrl, remText, recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
+  module.exports = { fetchSchoolHols, famOccurrences, famMerge, gardeAt, gardeRuns, getFY: () => FY, setFY: d => { FY = famMigrate(d); }, nextTogether, pendingGroups, apptTimes, periodOf, safeUrl, remText, recapData, otBaseline, planned, workedMin, dstChanges, isSummer, droitInfo, mergeData, easter, holidays, counters, clusters, bridgeOptions, buildIdx, addEntries, otBalance, dayInfo, defaultData,
     getDB: () => DB, setDB: d => { DB = migrate(d); } };
 }
 if (typeof document !== 'undefined') init();
