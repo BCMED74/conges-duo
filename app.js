@@ -4,7 +4,7 @@
 'use strict';
 
 const STORE_KEY = 'congesDuo.v1';
-const APP_VERSION = '2026-10-23 n°15';
+const APP_VERSION = '2026-10-24 n°16';
 const P = ['a', 'b'];
 const DOW = ['di', 'lu', 'ma', 'me', 'je', 've', 'sa'];
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet',
@@ -1337,6 +1337,8 @@ async function famConnect() {
 function gardeAt(s) {
   let best = null;
   for (const g of FY.garde) if (g.status !== 'demande' && g.start <= s && s <= (g.end || g.start) && (!best || g.start > best.start || (g.start === best.start && (g.end || g.start) < (best.end || best.start)))) best = g;
+  // Pas de période notée ce jour-là : on retombe sur le foyer habituel, s'il est réglé.
+  if (!best && (FY.parents.main === 'p1' || FY.parents.main === 'p2')) return { with: FY.parents.main, start: s, end: s, implicit: true };
   return best;
 }
 const parentName = w => esc(FY.parents[w] || w);
@@ -1452,7 +1454,7 @@ function packList(kidId) {
 function gardeSection() {
   const t = todayISO(), list = FY.garde.filter(g => g.status !== 'demande' && (g.end || g.start) >= t).sort((a, b) => a.start.localeCompare(b.start)).slice(0, 12);
   return `<h3 class="sec">Garde</h3>${gardeCard()}${famRequests()}
-    ${famAdult() ? `<div class="btns"><button class="btn sm pri" data-act="newGarde">+ Période</button><button class="btn sm" data-act="newAlternate">+ Semaines alternées</button></div>` : '<div class="btns"><button class="btn sm pri" data-act="gReq">Demander un changement</button></div>'}
+    ${famAdult() ? `<div class="btns"><button class="btn sm pri" data-act="newGarde">+ Période (vacances, week-end…)</button><button class="btn sm" data-act="newAlternate">+ Semaines alternées</button></div>` : '<div class="btns"><button class="btn sm pri" data-act="gReq">Demander un changement</button></div>'}
     ${list.length ? `<section class="card list">${list.map(g => `<div class="entry"><span class="gdot g-${g.with}"></span><div class="grow"><b>Chez ${parentName(g.with)}</b> <small class="muted">du ${short(g.start)} au ${short(g.end || g.start)}</small>${g.note ? `<br><small>${esc(g.note)}</small>` : ''}</div>
       ${famAdult() ? `<button class="iconbtn" data-act="editGarde" data-id="${g.id}" aria-label="Modifier">✎</button>` : ''}</div>`).join('')}</section>` : ''}`;
 }
@@ -1530,6 +1532,9 @@ function famSettings() {
     <div class="btns"><button class="btn sm" data-act="famAddMember">+ Ajouter ce membre</button></div>
     <h4>Garde : noms des deux foyers</h4>
     <div class="two">${field('Foyer 1', `<input data-fpar="p1" value="${esc(FY.parents.p1)}">`)}${field('Foyer 2', `<input data-fpar="p2" value="${esc(FY.parents.p2)}">`)}</div>
+    <div class="field"><span class="lbl">En dehors des périodes notées, ${esc(FY.members.filter(m => m.role === 'enfant').map(m => m.name).join(', ') || 'l\u2019enfant')} vit</span>
+      ${radios('f_main', [['p1', 'chez ' + FY.parents.p1], ['p2', 'chez ' + FY.parents.p2], ['', 'pas de foyer habituel']], FY.parents.main || '')}</div>
+    <p class="muted">Exemples : chez Maman toute l\u2019année et chez Papa pendant les vacances notées avec « + Période » ; ou pas de foyer habituel avec des semaines alternées.</p>
     <h4>Notifications famille sur ce téléphone</h4>
     <div class="row"><span>Ce téléphone</span><b>${famPushOk() ? 'activé' : 'non activé'}</b></div>
     ${subs.map(([k, v]) => `<div class="row"><span>${esc(v.name || '')}</span><b>${esc(famName(v.person))}</b></div>`).join('')}
@@ -2041,6 +2046,7 @@ function onChange(ev) {
   } else if (t.id === 'importFile') {
     if (t.files[0]) importFile(t.files[0]); t.value = '';
   } else if (t.dataset.fsync) { FSY[t.dataset.fsync] = t.value.trim(); famSaveSync();
+  } else if (t.name === 'f_main') { FY.parents.main = t.value; FY.su = Date.now(); famSave(); render();
   } else if (t.dataset.fpar) { FY.parents[t.dataset.fpar] = t.value.trim() || FY.parents[t.dataset.fpar]; FY.su = Date.now(); famSave();
   } else if (t.dataset.reptoggle) { const u = document.querySelector('[data-row=until]'); if (u) u.hidden = !t.checked;
   } else if (t.dataset.famtoggle) {
